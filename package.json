@@ -13,8 +13,8 @@
     }
   },
   "bin": {
-    "vela": "./dist/bin/vela-cli.js",
-    "vela-privacy": "./dist/bin/vela-cli.js"
+    "vela": "dist/bin/vela-cli.js",
+    "vela-privacy": "dist/bin/vela-cli.js"
   },
   "files": [
     "dist",
