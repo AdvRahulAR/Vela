@@ -1,0 +1,59 @@
+{
+  "name": "vela-privacy",
+  "version": "0.2.0",
+  "description": "Universal LLM privacy gateway — quantum-resilient PII masking, FPE format preservation, and real-time streaming de-masking",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "vela": "./dist/bin/vela-cli.js",
+    "vela-privacy": "./dist/bin/vela-cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/**/*.test.ts",
+    "benchmark": "node --import tsx tests/benchmark.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "pii",
+    "privacy",
+    "masking",
+    "llm",
+    "quantum",
+    "fpe",
+    "ml-kem",
+    "post-quantum",
+    "redaction",
+    "ai-gateway",
+    "security"
+  ],
+  "author": "rahulee <advrahular@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "@noble/post-quantum": "^0.7.0",
+    "ff1-js": "^1.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
