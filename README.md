@@ -1,12 +1,12 @@
 # Vela — Universal LLM Privacy Gateway
 
 <p align="center">
-  <strong>Quantum-resilient PII masking & format-preserving anonymization for any LLM, app, or agent.</strong>
+  <strong>Quantum-resilient PII masking & format-preserving anonymization for any LLM, app, or agent. Built by Dharmabot AI.</strong>
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/vela-privacy"><img src="https://img.shields.io/npm/v/vela-privacy.svg?style=flat-square&color=blue" alt="npm version" /></a>
-  <a href="https://github.com/rahulee/vela"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="license" /></a>
+  <a href="https://github.com/AdvRahulAR/Vela"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="license" /></a>
   <a href="https://csrc.nist.gov/pubs/fips/203/final"><img src="https://img.shields.io/badge/post--quantum-ML--KEM--768%20(FIPS%20203)-purple.svg?style=flat-square" alt="NIST FIPS 203" /></a>
   <a href="https://csrc.nist.gov/pubs/sp/800/38/g/r1/final"><img src="https://img.shields.io/badge/encryption-FF1%20FPE%20(NIST%20SP%20800--38G)-orange.svg?style=flat-square" alt="NIST SP 800-38G" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/typescript-strict%20100%25-blue.svg?style=flat-square" alt="TypeScript Strict" /></a>
@@ -257,4 +257,4 @@ ML-KEM-768 Handshake:
 
 ## License
 
-MIT © [Rahul A R](mailto:advrahular@gmail.com)
+MIT © [Dharmabot AI](https://dharmabot.ai)

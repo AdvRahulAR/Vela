@@ -41,7 +41,11 @@
     "ai-gateway",
     "security"
   ],
-  "author": "rahulee <advrahular@gmail.com>",
+  "author": "Dharmabot AI <advrahular@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AdvRahulAR/Vela.git"
+  },
   "license": "MIT",
   "dependencies": {
     "@noble/post-quantum": "^0.7.0",
