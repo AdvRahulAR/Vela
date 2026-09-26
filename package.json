@@ -44,7 +44,7 @@
   "author": "Dharmabot AI <advrahular@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/AdvRahulAR/Vela.git"
+    "url": "git+https://github.com/AdvRahulAR/Vela.git"
   },
   "license": "MIT",
   "dependencies": {
