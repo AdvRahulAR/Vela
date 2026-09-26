@@ -52,7 +52,7 @@ OPTIONS FOR 'proxy':
 EXAMPLES:
   $ npx vela-privacy proxy --port 8787
   $ npx vela-privacy keygen
-  $ npx vela-privacy mask "My email is alice@company.com and Aadhaar 2345 6789 0123"
+  $ npx vela-privacy mask "My email is alice@company.com and Aadhaar 2345 6789 0124"
 `);
 }
 

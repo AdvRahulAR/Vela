@@ -12,10 +12,10 @@ interface InternalPattern {
 
 
 const BUILTIN_PATTERNS: InternalPattern[] = [
-  // Secrets & API Keys (Checked first to prevent accidental sub-string detection)
+  // Secrets & API Keys (OpenAI sk-proj-/sk-, Anthropic sk-ant-, GitHub ghp_, AWS AKIA, Slack)
   {
     type: 'SECRET_KEY',
-    regex: /\b(?:sk-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,255}|xox[baprs]-[0-9A-Za-z]{10,48})\b/g,
+    regex: /\b(?:sk-proj-[A-Za-z0-9_-]+|sk-ant-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9_]+|(?:gho|ghu|ghs|ghr)_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[0-9A-Za-z]{10,48})\b/g,
     confidence: 1.0,
   },
   // JWT
@@ -60,10 +60,10 @@ const BUILTIN_PATTERNS: InternalPattern[] = [
     regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/g,
     confidence: 0.98,
   },
-  // Phone: Indian format (+91/0 prefix or 10-digit starting with 6-9)
+  // Phone: Indian format (+91/0 prefix with contiguous/spaced/dashed digits, or 10-digit starting with 6-9)
   {
     type: 'PHONE',
-    regex: /(?:\+91[\s-]?)?(?:\b0)?[6-9]\d{9}\b/g,
+    regex: /(?:\+91[ -]?(?:0[ -]?)?|\b0[ -]?)[6-9]\d{4}[ -]?\d{5}\b|\b[6-9]\d{9}\b/g,
     confidence: 0.9,
   },
   // SSN (US)

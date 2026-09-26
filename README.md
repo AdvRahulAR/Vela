@@ -94,18 +94,18 @@ const vela = new Vela({
 });
 
 // 3. Mask PII in prompt
-const prompt = 'User PAN ABCDE1234F, Aadhaar 2345 6789 0123, email alice@company.com works on ProjectApollo.';
+const prompt = 'User PAN ABCDE1234F, Aadhaar 2345 6789 0124, email alice@company.com works on ProjectApollo.';
 const masked = vela.mask(prompt);
 
 console.log(masked.text);
 // "User PAN JKRZ2WFMOD, Aadhaar 4892 1045 7712, email <PII type="EMAIL" id="0"/> works on <PII type="CUSTOM" id="1"/>."
 
 // 4. Restore LLM Response
-const llmResponse = 'Verified tax record for PAN JKRZ2WFMOD and notified <PII type="EMAIL" id="0"/> regarding <PII type="CUSTOM" id="1"/>.';
+const llmResponse = 'Verified tax record for PAN JKRZ2WFMOD, Aadhaar 4892 1045 7712 and notified <PII type="EMAIL" id="0"/> regarding <PII type="CUSTOM" id="1"/>.';
 const unmasked = vela.unmask(llmResponse, masked);
 
 console.log(unmasked.text);
-// "Verified tax record for PAN ABCDE1234F and notified alice@company.com regarding ProjectApollo."
+// "Verified tax record for PAN ABCDE1234F, Aadhaar 2345 6789 0124 and notified alice@company.com regarding ProjectApollo."
 ```
 
 ---
@@ -206,6 +206,8 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 ---
 
 ## Supported PII & Entity Detectors
+
+> *Note: Numbers failing checksum verification (e.g. invalid Verhoeff for Aadhaar or Luhn for cards) are intentionally skipped to prevent false positives.*
 
 | Entity | Validation Technique | Masking Strategy |
 |---|---|:---:|

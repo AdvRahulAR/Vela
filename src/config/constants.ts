@@ -22,7 +22,7 @@ export const DEFAULT_TOKEN_TYPES: EntityType[] = [
   'CUSTOM',
 ];
 
-export const PACKAGE_VERSION = '0.2.2';
+export const PACKAGE_VERSION = '0.2.3';
 
 export const DIGITS = '0123456789';
 export const UPPER_ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
