@@ -1,7 +1,7 @@
 {
   "name": "vela-privacy",
-  "version": "0.2.3",
-  "description": "Universal LLM privacy gateway — quantum-resilient PII masking, FPE format preservation, and real-time streaming de-masking",
+  "version": "0.3.0",
+  "description": "LLM privacy gateway — PII masking with NIST FF1 format-preserving encryption, reversible placeholders and streaming de-masking for OpenAI and Anthropic",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -33,13 +33,16 @@
     "privacy",
     "masking",
     "llm",
-    "quantum",
     "fpe",
     "ml-kem",
     "post-quantum",
     "redaction",
     "ai-gateway",
-    "security"
+    "security",
+    "anthropic",
+    "openai",
+    "dpdp",
+    "aadhaar"
   ],
   "author": "Dharmabot AI <advrahular@gmail.com>",
   "repository": {
@@ -48,8 +51,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@noble/post-quantum": "^0.7.0",
-    "ff1-js": "^1.0.2"
+    "@noble/post-quantum": "^0.7.0"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

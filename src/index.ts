@@ -1,23 +1,46 @@
-// Core classes and engines
+// Core
 export { Vela } from './core/vela.js';
-export { FpeMasker } from './core/fpe.js';
+export { MaskSession } from './core/session.js';
+export { FF1 } from './core/ff1.js';
+export { FpeMasker, STRUCTURED_TYPES } from './core/fpe.js';
 export { TokenMasker } from './core/tokens.js';
 export { QuantumKeyManager } from './core/quantum.js';
-export { TokenStreamDeMasker, createSseDeMasker } from './core/streaming.js';
-export { detectPii } from './core/detector.js';
+export { Restorer, StreamRestorer, replacementsFrom } from './core/matcher.js';
+export {
+  TokenStreamDeMasker,
+  createSseDeMasker,
+  createSseTransformer,
+  createEventUnmasker,
+  OpenAiChatStreamUnmasker,
+  AnthropicStreamUnmasker,
+  ResponsesStreamUnmasker,
+} from './core/streaming.js';
+export { detectPii, type DetectOptions } from './core/detector.js';
 
 // Algorithms
 export { validateVerhoeff, generateVerhoeffChecksum } from './core/algorithms/verhoeff.js';
-export { validateLuhn } from './core/algorithms/luhn.js';
+export { validateLuhn, luhnCheckDigit } from './core/algorithms/luhn.js';
 export { validateIban } from './core/algorithms/iban.js';
+export { validateGstin, gstinCheckChar } from './core/algorithms/gstin.js';
 
 // Integrations
 export {
   maskOpenAiRequest,
+  maskOpenAiResponsesRequest,
   unmaskOpenAiResponse,
   unmaskOpenAiStream,
+  unmaskOpenAiResponsesStream,
   wrapOpenAiClient,
+  type WrapClientOptions,
 } from './integrations/openai.js';
+export {
+  maskAnthropicRequest,
+  unmaskAnthropicResponse,
+  unmaskAnthropicStream,
+  wrapAnthropicClient,
+} from './integrations/anthropic.js';
+export { detectApiFormat, maskLlmRequest } from './integrations/formats.js';
+export { forwardLlmRequest } from './integrations/gateway.js';
 export { createFetchInterceptor } from './integrations/fetch.js';
 export { createExpressMiddleware } from './integrations/express.js';
 export { runProxy } from './integrations/proxy.js';
@@ -34,7 +57,10 @@ export {
   DEFAULT_FPE_TYPES,
   DEFAULT_TOKEN_TYPES,
   DEFAULT_PROXY_PORT,
+  DEFAULT_PROXY_HOST,
   DEFAULT_UPSTREAM_URL,
+  DEFAULT_ANTHROPIC_URL,
+  SESSION_HEADER,
 } from './config/constants.js';
 
 // Types
@@ -43,10 +69,14 @@ export type {
   StandardEntityType,
   DetectedEntity,
   CustomDetector,
+  EntityRecognizer,
   VelaConfig,
+  SessionOptions,
+  Replacement,
   MaskResult,
   UnmaskResult,
   StreamDeMasker,
+  LlmApiFormat,
   OpenAIMessage,
   OpenAIRequest,
   OpenAIResponse,
@@ -60,8 +90,4 @@ export type {
   ProxyServerOptions,
 } from './types.js';
 
-export type {
-  KeyPair,
-  EncapsulationResult,
-  SealedKey,
-} from './core/quantum.js';
+export type { KeyPair, EncapsulationResult, SealedKey } from './core/quantum.js';

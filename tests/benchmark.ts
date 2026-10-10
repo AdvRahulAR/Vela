@@ -15,7 +15,7 @@ const base = '23456789012';
 const chk = generateVerhoeffChecksum(base);
 const validAadhaar = `${base.slice(0, 4)} ${base.slice(4, 8)} ${base.slice(8, 11)}${chk}`;
 
-const sampleText = `Employee Alice Smith (PAN: ABCDE1234F, Aadhaar: ${validAadhaar}, Card: 4532-0151-1283-0366, Phone: +91 9876543210, Email: alice.smith@enterprise.org) is assigned to ConfidentialProject under CASE NO. 1234 OF 2023.`;
+const sampleText = `Employee Alice Smith (PAN: ABCDE1234F, Aadhaar: ${validAadhaar}, Card: 4532-0151-1283-0366, Phone: +91 9876543210, Email: alice.smith@enterprise.org) is assigned to ConfidentialProject.`;
 
 const ITERATIONS = 1000;
 

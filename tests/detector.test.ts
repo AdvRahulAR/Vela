@@ -120,12 +120,9 @@ describe('PII Detector', () => {
     assert.ok(foundAws, 'Failed to detect AWS key');
   });
 
-  it('should detect Indian court Case IDs', () => {
-    const text = 'In CIVIL APPEAL NO. 1234 OF 2020 and WRIT PETITION 45 OF 2019.';
-    const entities = detectPii(text);
-
-    const cases = entities.filter((e) => e.type === 'CASE_ID');
-    assert.equal(cases.length, 2);
+  it('should leave court case citations untouched (CASE_ID removed in 0.3.0)', () => {
+    const text = 'In CIVIL APPEAL NO. 1234 OF 2020, WRIT PETITION (C) NO. 56 OF 2021 and case CRL123456.';
+    assert.deepEqual(detectPii(text), []);
   });
 
   it('should detect valid IBAN and reject invalid IBAN', () => {

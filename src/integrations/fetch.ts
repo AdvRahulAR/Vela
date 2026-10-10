@@ -1,8 +1,7 @@
 import type { Vela } from '../core/vela.js';
-import { LLM_REQUEST_PATHS } from '../config/constants.js';
-import { maskOpenAiRequest, unmaskOpenAiResponse } from './openai.js';
-import { createSseDeMasker } from '../core/streaming.js';
-import type { FetchInterceptorOptions, OpenAIRequest, OpenAIResponse } from '../types.js';
+import { forwardLlmRequest } from './gateway.js';
+import { detectApiFormat } from './formats.js';
+import type { FetchInterceptorOptions } from '../types.js';
 
 const KNOWN_PROVIDERS: Record<string, string[]> = {
   openai: ['api.openai.com'],
@@ -13,106 +12,56 @@ const KNOWN_PROVIDERS: Record<string, string[]> = {
 };
 
 /**
- * Drop-in fetch interceptor.
- * Wraps globalThis.fetch to automatically mask outbound LLM requests
- * and de-mask both JSON and SSE streaming responses.
+ * Create a fetch() replacement that masks OpenAI (Chat Completions + Responses)
+ * and Anthropic Messages calls and restores their JSON / SSE responses.
+ *
+ *   globalThis.fetch = createFetchInterceptor(vela);
  */
-export function createFetchInterceptor(
-  vela: Vela,
-  opts: FetchInterceptorOptions = {}
-): (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
+export function createFetchInterceptor(vela: Vela, opts: FetchInterceptorOptions = {}): typeof fetch {
   const originalFetch = globalThis.fetch.bind(globalThis);
-  const targetPaths = opts.targetUrls ?? LLM_REQUEST_PATHS;
-
-  // Build list of domains to match if providers specified
-  const providerDomains: string[] = [];
-  if (opts.providers && opts.providers.length > 0) {
-    for (const provider of opts.providers) {
-      const lower = provider.toLowerCase();
-      const domains = KNOWN_PROVIDERS[lower];
-      if (domains) {
-        providerDomains.push(...domains);
-      } else {
-        providerDomains.push(lower);
-      }
-    }
+  const hosts = new Set<string>();
+  for (const p of opts.providers ?? []) {
+    for (const h of KNOWN_PROVIDERS[p.toLowerCase()] ?? [p.toLowerCase()]) hosts.add(h);
   }
 
-  return async function velaFetch(
-    input: RequestInfo | URL,
-    init?: RequestInit
-  ): Promise<Response> {
-    const url =
-      typeof input === 'string'
-        ? input
-        : input instanceof URL
-        ? input.href
-        : input.url;
+  const isTarget = (url: URL): boolean => {
+    if (hosts.size > 0 && !hosts.has(url.host.toLowerCase()) && !hosts.has(url.hostname.toLowerCase())) return false;
+    if (opts.targetUrls) return opts.targetUrls.some((p) => url.pathname.endsWith(p) || url.href.includes(p));
+    return detectApiFormat(url.pathname) !== null;
+  };
 
-    const matchesPath = targetPaths.some((p) => url.includes(p));
-    const matchesProvider =
-      providerDomains.length > 0
-        ? providerDomains.some((d) => url.includes(d))
-        : true;
-
-    const isTarget = matchesPath && matchesProvider;
-    if (!isTarget || !init?.body || typeof init.body !== 'string') {
+  return async function velaFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const isRequest = typeof Request !== 'undefined' && input instanceof Request;
+    const href = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
+    let url: URL;
+    try {
+      url = new URL(href);
+    } catch {
       return originalFetch(input, init);
     }
+    const method = (init?.method ?? (isRequest ? (input as Request).method : 'GET')).toUpperCase();
+    if (method !== 'POST' || !isTarget(url) || detectApiFormat(url.pathname) === null) return originalFetch(input, init);
 
-    let body: OpenAIRequest;
+    let body: string | undefined;
+    if (typeof init?.body === 'string') body = init.body;
+    else if (init?.body instanceof Uint8Array) body = new TextDecoder().decode(init.body);
+    else if (init?.body === undefined && isRequest) body = await (input as Request).clone().text();
+    if (!body) return originalFetch(input, init);
     try {
-      body = JSON.parse(init.body) as OpenAIRequest;
+      JSON.parse(body);
     } catch {
       return originalFetch(input, init);
     }
 
-    const { payload, results } = maskOpenAiRequest(vela, body);
-    const maskedInit: RequestInit = {
-      ...init,
-      body: JSON.stringify(payload),
-    };
+    const headers = new Headers(isRequest ? (input as Request).headers : undefined);
+    new Headers(init?.headers).forEach((v, k) => headers.set(k, v));
+    const sessionId = opts.sessionId?.(href, init);
+    const signal = init?.signal ?? (isRequest ? (input as Request).signal : undefined);
 
-    const response = await originalFetch(input, maskedInit);
-    const contentType = response.headers.get('content-type') || '';
-
-    // Handle Server-Sent Events (SSE streaming)
-    if (contentType.includes('text/event-stream') && response.body) {
-      const deMasker = createSseDeMasker(results);
-      const decoder = new TextDecoder();
-      const encoder = new TextEncoder();
-
-      const transformStream = new TransformStream<Uint8Array, Uint8Array>({
-        transform(chunk, controller) {
-          const text = decoder.decode(chunk, { stream: true });
-          const processed = deMasker(text);
-          if (processed) {
-            controller.enqueue(encoder.encode(processed));
-          }
-        },
-      });
-
-      const stream = response.body.pipeThrough(transformStream);
-      return new Response(stream, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
-    }
-
-    // Handle standard JSON completions
-    if (contentType.includes('application/json')) {
-      const clone = response.clone();
-      const json = (await clone.json()) as OpenAIResponse;
-      const unmasked = unmaskOpenAiResponse(vela, json, results);
-
-      return new Response(JSON.stringify(unmasked), {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
-    }
-
-    return response;
+    return forwardLlmRequest(
+      vela,
+      { url: href, method, headers, body, ...(signal ? { signal } : {}) },
+      { fetchImpl: originalFetch, ...(sessionId ? { sessionId } : {}) },
+    );
   };
 }

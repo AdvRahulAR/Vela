@@ -12,7 +12,13 @@ export type StandardEntityType =
   | 'SSN'
   | 'IBAN'
   | 'IP_ADDRESS'
-  | 'CASE_ID'
+  | 'BANK_ACCOUNT'
+  | 'IFSC'
+  | 'PASSPORT'
+  | 'UPI_ID'
+  | 'DATE_OF_BIRTH'
+  | 'PIN_CODE'
+  | 'ADDRESS'
   | 'SECRET_KEY'
   | 'JWT'
   | 'PERSON'
@@ -39,10 +45,19 @@ export interface CustomDetector {
   validator?: (match: string) => boolean;
 }
 
+/**
+ * A pluggable entity recognizer (e.g. a wrapper around an NER model such as
+ * spaCy, Presidio, compromise or wink-nlp). Must be synchronous; return spans
+ * with start/end offsets into `text`.
+ */
+export type EntityRecognizer = (
+  text: string,
+) => Array<{ type: EntityType; start: number; end: number; confidence?: number }>;
+
 export interface VelaConfig {
-  /** 32-byte FPE key — if omitted, derived from ML-KEM-768 shared secret. */
+  /** 32-byte FPE key. If omitted, a random ephemeral key is generated per Vela instance. */
   fpeKey?: Uint8Array;
-  /** Custom tweak for FPE (default 8-byte zero tweak for deterministic per-session masking). */
+  /** Legacy tweak for the low-level FpeMasker.encrypt()/decrypt() API. Not used by mask(). */
   fpeTweak?: Uint8Array;
   /** Glossary of confidential terms/phrases to mask. */
   glossary?: string[];
@@ -54,8 +69,35 @@ export interface VelaConfig {
   validateChecksums?: boolean;
   /** Custom detectors to run alongside built-in detectors. */
   customDetectors?: CustomDetector[];
+  /** Extra recognizers (e.g. NER models) run alongside the built-in detectors. */
+  recognizers?: EntityRecognizer[];
+  /**
+   * Built-in heuristic detection of person names (honorifics, "my name is …",
+   * first-name gazetteer). Default: true.
+   */
+  detectNames?: boolean;
   /** Enable structured JSON logging. Default: false. */
   enableLogging?: boolean;
+}
+
+export interface SessionOptions {
+  /**
+   * Stable conversation/session identifier. When set, the same value masks to
+   * the same ciphertext for every request carrying this id (keeps provider
+   * prompt-caching and server-side conversation state working). When omitted,
+   * a random per-session tweak is used so masked values cannot be linked
+   * across sessions.
+   */
+  sessionId?: string;
+}
+
+export interface Replacement {
+  /** What the LLM sees. */
+  masked: string;
+  /** The real value. */
+  original: string;
+  type: EntityType;
+  method: 'fpe' | 'token';
 }
 
 export interface MaskResult {
@@ -66,6 +108,8 @@ export interface MaskResult {
   fpeMap: Record<string, string>;
   /** Entities detected during masking. */
   entities: DetectedEntity[];
+  /** Full replacement records (masked <-> original, type, method). */
+  replacements?: Replacement[];
 }
 
 export interface UnmaskResult {
@@ -147,19 +191,27 @@ export interface OpenAIResponse {
   [key: string]: unknown;
 }
 
+export type LlmApiFormat = 'openai-chat' | 'openai-responses' | 'anthropic-messages';
+
 export interface FetchInterceptorOptions {
   providers?: string[];
   targetUrls?: string[];
+  /** Resolve a stable session id for a request (alternatively send an `x-vela-session` header). */
+  sessionId?: (url: string, init?: RequestInit) => string | undefined;
 }
 
 export interface ExpressMiddlewareOptions {
   upstream?: string;
+  /** Upstream API key. Sent as `Authorization: Bearer` (OpenAI) or `x-api-key` (Anthropic). */
   apiKey?: string;
 }
 
 export interface ProxyServerOptions {
   port?: number;
+  /** Interface to bind. Default: 127.0.0.1 (loopback only). Use 0.0.0.0 to expose deliberately. */
+  host?: string;
   upstream?: string;
+  /** Upstream API key. Sent as `Authorization: Bearer` (OpenAI) or `x-api-key` (Anthropic). */
   apiKey?: string;
   maxBodySizeBytes?: number;
 }

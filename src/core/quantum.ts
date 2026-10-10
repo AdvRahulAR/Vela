@@ -18,9 +18,12 @@ export interface EncapsulationResult {
 }
 
 /**
- * Vela quantum-resilient key management.
- * Uses ML-KEM-768 (NIST FIPS 203) for post-quantum key agreement and
- * AES-256-GCM to protect FPE keys in transit.
+ * Key management for distributing a shared FPE key between services.
+ *
+ * ML-KEM-768 (NIST FIPS 203) provides post-quantum key agreement and
+ * AES-256-GCM protects the FPE key in transit. You only need this when several
+ * processes/hosts must share one FPE key (e.g. a stable `sessionId` across a
+ * cluster); a single process can simply use a random 32-byte key.
  */
 export class QuantumKeyManager {
   /**
@@ -75,9 +78,12 @@ export class QuantumKeyManager {
   }
 
   /**
-   * Seal (encrypt) an FPE key using AES-256-GCM with a post-quantum shared secret.
+   * Seal (encrypt) an FPE key for transport using AES-256-GCM.
+   * The AES key is HKDF-derived from the ML-KEM shared secret with its own label
+   * ("vela-seal-key-v1"), so it never equals a key derived for FPE from the same
+   * secret. Optional `aad` binds the sealed blob to context (e.g. tenant id).
    */
-  static sealFpeKey(fpeKey: Uint8Array, sharedSecret: Uint8Array): SealedKey {
+  static sealFpeKey(fpeKey: Uint8Array, sharedSecret: Uint8Array, aad?: Uint8Array): SealedKey {
     if (fpeKey.length !== 32) {
       throw new Error(`FPE key must be 32 bytes, received ${fpeKey.length}`);
     }
@@ -86,7 +92,9 @@ export class QuantumKeyManager {
     }
 
     const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', sharedSecret, iv);
+    const sealKey = QuantumKeyManager.deriveFpeKey(sharedSecret, undefined, 'vela-seal-key-v1');
+    const cipher = createCipheriv('aes-256-gcm', sealKey, iv);
+    if (aad) cipher.setAAD(aad);
     const data = Buffer.concat([cipher.update(fpeKey), cipher.final()]);
     const tag = cipher.getAuthTag();
 
@@ -100,12 +108,14 @@ export class QuantumKeyManager {
   /**
    * Unseal (decrypt) an FPE key using AES-256-GCM with a post-quantum shared secret.
    */
-  static unsealFpeKey(sealed: SealedKey, sharedSecret: Uint8Array): Uint8Array {
+  static unsealFpeKey(sealed: SealedKey, sharedSecret: Uint8Array, aad?: Uint8Array): Uint8Array {
     if (sharedSecret.length !== 32) {
       throw new Error(`Shared secret must be 32 bytes, received ${sharedSecret.length}`);
     }
 
-    const decipher = createDecipheriv('aes-256-gcm', sharedSecret, sealed.iv);
+    const sealKey = QuantumKeyManager.deriveFpeKey(sharedSecret, undefined, 'vela-seal-key-v1');
+    const decipher = createDecipheriv('aes-256-gcm', sealKey, sealed.iv);
+    if (aad) decipher.setAAD(aad);
     decipher.setAuthTag(sealed.tag);
     const decrypted = Buffer.concat([decipher.update(sealed.data), decipher.final()]);
 

@@ -1,67 +1,40 @@
-# Vela — Universal LLM Privacy Gateway
+# Vela — LLM Privacy Gateway
 
 <p align="center">
-  <strong>Quantum-resilient PII masking & format-preserving anonymization for any LLM, app, or agent. Built by Dharmabot AI.</strong>
+  <strong>Mask PII before it reaches any LLM, restore it in the response. Built by Dharmabot AI.</strong>
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/vela-privacy"><img src="https://img.shields.io/npm/v/vela-privacy.svg?style=flat-square&color=blue" alt="npm version" /></a>
   <a href="https://github.com/AdvRahulAR/Vela"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="license" /></a>
-  <a href="https://csrc.nist.gov/pubs/fips/203/final"><img src="https://img.shields.io/badge/post--quantum-ML--KEM--768%20(FIPS%20203)-purple.svg?style=flat-square" alt="NIST FIPS 203" /></a>
-  <a href="https://csrc.nist.gov/pubs/sp/800/38/g/r1/final"><img src="https://img.shields.io/badge/encryption-FF1%20FPE%20(NIST%20SP%20800--38G)-orange.svg?style=flat-square" alt="NIST SP 800-38G" /></a>
-  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/typescript-strict%20100%25-blue.svg?style=flat-square" alt="TypeScript Strict" /></a>
+  <a href="https://csrc.nist.gov/pubs/sp/800/38/g/r1/final"><img src="https://img.shields.io/badge/FPE-NIST%20FF1%20(SP%20800--38G)%20test--vector%20verified-orange.svg?style=flat-square" alt="NIST SP 800-38G" /></a>
 </p>
 
 ---
 
 ## Why Vela?
 
-Most PII masking solutions break LLM reasoning by replacing structured identifiers with destructive tags like `[REDACTED]` or `<PII id="1"/>`. Downstream models lose length, character set context, and formatting expectations.
+Plain redaction (`[REDACTED]`) destroys the structure an LLM needs to reason about identifiers. Vela keeps it:
 
-**Vela** combines **NIST SP 800-38G FF1 Format-Preserving Encryption (FPE)** with **ML-KEM-768 (NIST FIPS 203)** post-quantum key agreement. Real structured IDs become realistic encrypted tokens of identical length and charset, while soft PII is mapped to semantic reversible tokens.
-
-| Feature | Naive Regex / Redaction | Rehydra / Presidio | Vela |
-|---|:---:|:---:|:---:|
-| **Structured Output** | `[REDACTED]` | `<PII type="ID" id="1"/>` | `2602 9025 6010` (Format-Preserving) |
-| **Format Preserved** | ❌ No | ❌ No | ✅ **Yes** (Length, Charset, Delimiters) |
-| **Reversibility** | ❌ Irreversible | Memory Map Lookup | ✅ **Keyed O(1) Memory** |
-| **Quantum Resilient** | ❌ None | ❌ None | ✅ **ML-KEM-768 + AES-256-GCM** |
-| **Streaming SSE** | ❌ No | ⚠️ Partial | ✅ **Chunk-Boundary Aware Buffer** |
-| **Checksum Verification** | ❌ No | ⚠️ Basic | ✅ **Verhoeff (Aadhaar) + Luhn (Cards)** |
-| **API Secret Leak Prevention** | ❌ No | ❌ No | ✅ **OpenAI, Anthropic, AWS, GitHub Keys** |
-| **Multi-Surface** | SDK Only | SDK Only | ✅ **SDK, OpenAI, Fetch, Express, CLI** |
-
----
-
-## Architecture
+- **Structured IDs** (Aadhaar, PAN, GSTIN, cards, phones, IBAN, SSN, IPs, bank accounts…) are encrypted with **NIST FF1 format-preserving encryption**. The result has the same length, separators and character classes, **and is still structurally valid**: Aadhaar passes Verhoeff, cards pass Luhn and keep their brand digit, GSTINs get a valid check character, IBANs get valid check digits, phones keep their country code.
+- **Everything else** (names, emails, addresses, dates of birth, UPI IDs, secrets, your own glossary terms) becomes a readable, reversible placeholder like `[PERSON_1]` or `[EMAIL_2]`.
+- **Fail-closed:** if a detected value can't be format-preserved safely, it becomes a placeholder. Nothing detected is ever passed through.
+- **Restoration is tolerant:** if the model reformats a value (drops spaces, changes case, writes `EMAIL_1` without brackets), Vela still restores it. It also works mid-stream.
 
 ```
-[ User Input ]
-       │
-       ▼
-┌────────────────────────────────────────────────────────┐
-│               Vela Privacy Gateway Engine               │
-│                                                        │
-│  1. Checksum Detection (Verhoeff, Luhn, Regex, Leaks)  │
-│  2. Format-Preserving Encryption (NIST FF1)            │
-│  3. Post-Quantum Key Agreement (ML-KEM-768 FIPS 203)   │
-│  4. Semantic Token Replacement for Soft PII            │
-└────────────────────────────────────────────────────────┘
-       │ (Outbound Masked Request)
-       ▼
-[ External LLM Provider (OpenAI / Anthropic / Local) ]
-       │ (Inbound Response / SSE Stream)
-       ▼
-┌────────────────────────────────────────────────────────┐
-│            Vela Real-Time Stream De-Masker             │
-│                                                        │
-│  - Reassembles split tokens across chunk boundaries    │
-│  - Restores originals using keyed session state        │
-└────────────────────────────────────────────────────────┘
-       │
-       ▼
-[ Unmasked Plaintext to Application ]
+Rahul Sharma (PAN ABCDE1234F, Aadhaar 2345 6789 0124, +91 98765 43210, rahul@company.com) leads ProjectApollo.
+            ↓
+[PERSON_1] (PAN SDUDJ8635F, Aadhaar 5096 7654 3028, +91 85254 01919, [EMAIL_1]) leads [CUSTOM_1].
 ```
+
+| | Naive redaction | Vela |
+|---|:---:|:---:|
+| Structured IDs | `[REDACTED]` | Valid-looking FF1 ciphertext (checksums recomputed) |
+| Soft PII | `[REDACTED]` | `[PERSON_1]`, `[EMAIL_2]` (reversible, JSON-safe) |
+| Multi-message requests | — | One session per request → unique placeholders across all messages |
+| Streaming | — | Per-choice / per-tool-call / per-content-block chunk-aware restoration |
+| Providers | — | OpenAI Chat Completions, OpenAI Responses, Anthropic Messages |
+| Surfaces | — | SDK, OpenAI & Anthropic client wrappers, fetch interceptor, Express, standalone proxy, CLI |
 
 ---
 
@@ -71,189 +44,171 @@ Most PII masking solutions break LLM reasoning by replacing structured identifie
 npm install vela-privacy
 ```
 
-Dual-format build supporting both **ESM** (`import`) and **CommonJS** (`require`).
+Node.js ≥ 18. Ships ESM and CommonJS.
 
 ---
 
-## Quick Start
-
-### 1. Direct Core SDK
+## Quick start
 
 ```typescript
-import { Vela, QuantumKeyManager } from 'vela-privacy';
+import { Vela } from 'vela-privacy';
 
-// 1. Post-Quantum Key Agreement (ML-KEM-768)
-const bob = QuantumKeyManager.generateKeyPair();
-const { cipherText, sharedSecret } = QuantumKeyManager.encapsulate(bob.publicKey);
-const fpeKey = QuantumKeyManager.deriveFpeKey(sharedSecret);
+const vela = new Vela({ glossary: ['ProjectApollo'] }); // random key per process
 
-// 2. Initialize Vela
-const vela = new Vela({
-  fpeKey,
-  glossary: ['ProjectApollo', 'SecretAcquisition'],
-});
+const session = vela.createSession();
+const masked = session.mask('Rahul Sharma, PAN ABCDE1234F, works on ProjectApollo');
+// "[PERSON_1], PAN SDUDJ8635F, works on [CUSTOM_1]"
 
-// 3. Mask PII in prompt
-const prompt = 'User PAN ABCDE1234F, Aadhaar 2345 6789 0124, email alice@company.com works on ProjectApollo.';
-const masked = vela.mask(prompt);
-
-console.log(masked.text);
-// "User PAN JKRZ2WFMOD, Aadhaar 4892 1045 7712, email <PII type="EMAIL" id="0"/> works on <PII type="CUSTOM" id="1"/>."
-
-// 4. Restore LLM Response
-const llmResponse = 'Verified tax record for PAN JKRZ2WFMOD, Aadhaar 4892 1045 7712 and notified <PII type="EMAIL" id="0"/> regarding <PII type="CUSTOM" id="1"/>.';
-const unmasked = vela.unmask(llmResponse, masked);
-
-console.log(unmasked.text);
-// "Verified tax record for PAN ABCDE1234F, Aadhaar 2345 6789 0124 and notified alice@company.com regarding ProjectApollo."
+const reply = '[PERSON_1] (PAN SDUDJ8635F) is cleared for [CUSTOM_1].'; // from the LLM
+session.unmask(reply).text;
+// "Rahul Sharma (PAN ABCDE1234F) is cleared for ProjectApollo."
 ```
+
+`vela.mask(text)` / `vela.unmask(text, result)` still work as one-shot helpers.
+
+### Sessions and `sessionId`
+
+Every value masked within one session gets one consistent placeholder, so a multi-message request never reuses `[EMAIL_1]` for two different people.
+
+- **No `sessionId` (default):** each session uses a random tweak, so the same Aadhaar masks differently in every session and nobody can link users across requests.
+- **`createSession({ sessionId: conversationId })`:** values mask identically for every request in that conversation. Use this when the provider keeps conversation state server-side (`previous_response_id`, Assistants) or when you rely on prompt caching. Through the proxy, fetch interceptor or Express middleware, send an `x-vela-session: <id>` header instead. Vela strips it before the request goes upstream.
 
 ---
 
-## Integration Surfaces
+## Integrations
 
-### 2. OpenAI SDK Wrapper (Sync + Streaming)
-
-Wrap your OpenAI client in one line. Outgoing prompts and tool call arguments are masked before leaving your server, and incoming responses (including streaming chunks) are unmasked in real time:
+### OpenAI client (Chat Completions + Responses, sync + streaming)
 
 ```typescript
 import OpenAI from 'openai';
-import { Vela, QuantumKeyManager, wrapOpenAiClient } from 'vela-privacy';
+import { Vela, wrapOpenAiClient } from 'vela-privacy';
 
-const fpeKey = QuantumKeyManager.deriveFpeKey(sharedSecret);
-const vela = new Vela({ fpeKey });
-
-const openai = wrapOpenAiClient(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }), vela);
-
-// Standard Completion
-const completion = await openai.chat.completions.create({
-  model: 'gpt-4o',
-  messages: [{ role: 'user', content: 'Audit tax PAN ABCDE1234F for user@example.com' }],
+const openai = wrapOpenAiClient(new OpenAI(), new Vela(), {
+  sessionId: (params) => params.metadata?.conversation_id, // optional
 });
 
-// Streaming Completion (automatically de-masked across SSE chunk boundaries)
-const stream = await openai.chat.completions.create({
-  model: 'gpt-4o',
-  messages: [{ role: 'user', content: 'Generate report for PAN ABCDE1234F' }],
-  stream: true,
-});
-
-for await (const chunk of stream) {
-  process.stdout.write(chunk.choices[0]?.delta?.content || '');
-}
+await openai.chat.completions.create({ model: 'gpt-4o', messages, stream: true });
+await openai.responses.create({ model: 'gpt-4o', input: 'Audit PAN ABCDE1234F' });
 ```
 
-### 3. Global Fetch Interceptor
+Wrapped requests mask system/user/assistant/tool messages, text parts and tool-call arguments. Arguments are parsed as JSON, so they stay valid JSON, and key names act as hints: `{"customer_name": "…"}` is treated as a name. Responses are restored everywhere, including streamed tool-call arguments.
 
-Zero code modifications to existing API clients. Automatically intercepts OpenAI/Anthropic endpoints:
+### Anthropic client
+
+```typescript
+import Anthropic from '@anthropic-ai/sdk';
+import { Vela, wrapAnthropicClient } from 'vela-privacy';
+
+const anthropic = wrapAnthropicClient(new Anthropic(), new Vela());
+await anthropic.messages.create({ model: 'claude-sonnet-4-5', system: '…', messages, max_tokens: 1024, stream: true });
+```
+
+Covers `system` (string or blocks), text blocks, `tool_use.input`, `tool_result` content and plain-text documents. Streaming handles `text_delta`, `thinking_delta` and `input_json_delta`. Use `create({ stream: true })` rather than the `messages.stream()` helper.
+
+### Global fetch interceptor
 
 ```typescript
 import { Vela, createFetchInterceptor } from 'vela-privacy';
-
-const vela = new Vela({ fpeKey });
-globalThis.fetch = createFetchInterceptor(vela);
-
-// All subsequent calls to /v1/chat/completions are automatically masked and unmasked!
+globalThis.fetch = createFetchInterceptor(new Vela(), { providers: ['openai', 'anthropic'] });
 ```
 
-### 4. Express / Connect Middleware
+Intercepts `POST …/chat/completions`, `…/responses` and `…/messages`, including calls made with a `Request` object, and restores JSON and SSE responses.
+
+### Express / Connect middleware
 
 ```typescript
-import express from 'express';
-import { Vela, createExpressMiddleware } from 'vela-privacy';
-
-const app = express();
-app.use(express.json());
-
-const vela = new Vela({ fpeKey });
-
-// Proxy /v1/chat/completions upstream to OpenAI with zero-trust privacy
-app.use(createExpressMiddleware(vela, {
-  upstream: 'https://api.openai.com',
-  apiKey: process.env.OPENAI_API_KEY,
-}));
-
-app.listen(3000);
+app.use(createExpressMiddleware(new Vela(), { upstream: 'https://api.openai.com', apiKey: process.env.OPENAI_API_KEY }));
 ```
 
-### 5. Standalone Proxy Server & CLI
+Works with or without `express.json()`. Query strings and provider headers (`anthropic-version`, `openai-organization`, …) are forwarded. `apiKey` is sent as `x-api-key` for Anthropic and as `Authorization: Bearer` otherwise.
 
-Launch a high-performance local privacy gateway without writing any backend code:
+### Standalone proxy & CLI
 
 ```bash
-# Start proxy listening on port 8787
-npx vela-privacy proxy --port 8787 --upstream https://api.openai.com
-
-# Generate production ML-KEM-768 keys
-npx vela-privacy keygen
-
-# Quick CLI masking test
+npx vela-privacy proxy --port 8787                 # binds to 127.0.0.1 only
+npx vela-privacy proxy --host 0.0.0.0 --api-key $OPENAI_API_KEY   # expose deliberately
 npx vela-privacy mask "My PAN is ABCDE1234F and email is test@domain.com"
+npx vela-privacy keygen                            # random 32-byte FPE key (hex)
+npx vela-privacy keygen --kem                      # full ML-KEM-768 keypair (JSON)
 ```
 
-Then point any client at `http://127.0.0.1:8787/v1`:
-
-```bash
-curl http://127.0.0.1:8787/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -d '{
-    "model": "gpt-4o",
-    "messages": [{"role": "user", "content": "My PAN is ABCDE1234F"}]
-  }'
-```
+Point `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` (or the Anthropic SDK's `baseURL=http://127.0.0.1:8787`) at it. If you don't pass `--upstream`, Anthropic paths go to `api.anthropic.com` and everything else goes to `api.openai.com`.
 
 ---
 
-## Supported PII & Entity Detectors
+## What is detected
 
-> *Note: Numbers failing checksum verification (e.g. invalid Verhoeff for Aadhaar or Luhn for cards) are intentionally skipped to prevent false positives.*
-
-| Entity | Validation Technique | Masking Strategy |
+| Entity | Detection | Masking |
 |---|---|:---:|
-| **Aadhaar (UIDAI)** | **Verhoeff Checksum Algorithm** (rejects invalid 12-digit numbers) | **FF1 FPE** (Digits + Spacing preserved) |
-| **Credit / Debit Cards** | **Luhn Algorithm (Mod 10)** (Visa, Mastercard, Amex, RuPay) | **FF1 FPE** (Digits + Delimiters preserved) |
-| **PAN (Indian Tax)** | 10-char Alphanumeric format | **FF1 FPE** (Upper Alnum preserved) |
-| **GSTIN** | State code check (01–38, 97, 99) + 15-char structure | **FF1 FPE** (Upper Alnum preserved) |
-| **Indian Court Case IDs** | Supreme Court, High Court, District citation formats | **FF1 FPE** |
-| **API Keys & Secrets** | OpenAI (`sk-...`), Anthropic (`sk-ant-...`), AWS (`AKIA...`), GitHub (`ghp_...`), Slack | **Semantic Token** |
-| **JWTs** | `eyJ...` 3-segment bearer tokens | **Semantic Token** |
-| **Email Addresses** | RFC-compliant email regex | **Semantic Token** |
-| **Phone Numbers** | E.164 and Indian (+91) formats | **FF1 FPE** |
-| **SSN (US)** | 9-digit hyphenated format | **FF1 FPE** |
-| **IP Addresses** | IPv4 standard notation | **FF1 FPE** |
-| **Custom Glossary** | Case-insensitive configurable dictionary / allowlists | **Semantic Token** |
+| Aadhaar | 12 digits + **Verhoeff** check | FF1, valid Verhoeff output |
+| PAN | `AAAAA9999A` (upper or lower case) | FF1, holder-type letter kept |
+| GSTIN | structure + state code | FF1, embedded PAN matches masked PAN, valid check char |
+| IFSC | `AAAA0XXXXXX` | FF1 on branch code |
+| Passport | letter + 7 digits / alnum, after "passport" | FF1 |
+| Bank account | 9–18 digits after "a/c", "account", "bank"… | FF1 |
+| UPI ID | `name@bank` | placeholder |
+| Credit / debit card | 13–19 digits + **Luhn** | FF1, brand digit kept, valid Luhn |
+| IBAN | compact or spaced + **mod-97** | FF1, valid check digits |
+| Phone | Indian mobile/landline, E.164 international, North American | FF1, country code kept |
+| SSN (US) | `###-##-####` (valid ranges) or 9 digits after "SSN" | FF1, valid ranges |
+| IP address | IPv4, IPv6 | FF1 (IPv4) / placeholder (IPv6) |
+| Email | including internationalised addresses | placeholder |
+| Person name | honorifics, "my name is…", role labels (client, petitioner…), sign-offs, first-name gazetteer, later mentions of a detected name (`Mr. Sharma`, `SHARMA`) | placeholder |
+| Address | "Address: …" fields, street addresses with Indian/Western road suffixes, sectors, PIN/ZIP | placeholder |
+| Date of birth | dates after "DOB", "born on"… | placeholder |
+| PIN / ZIP code | after "PIN", "pincode", "zip" | placeholder |
+| Organisation | names ending Pvt Ltd / Ltd / LLP / Inc / LLC / GmbH… | placeholder |
+| Secrets | OpenAI, Anthropic, GitHub, AWS, Google, Stripe, Slack keys, private-key blocks, JWTs | placeholder |
+| Custom glossary | your terms, case-insensitive | placeholder |
+
+**Precision guards:**
+- A bare 10-digit number is not treated as a phone after "order", "invoice", "txn", "ref", "id", "₹"…
+- A name found only through the gazetteer needs a surname, unless the first name can't be mistaken for an English word ("Will", "May", "Sunny" can).
+- Checksum-failing Aadhaar, card and IBAN numbers are skipped (turn off with `validateChecksums: false`).
+
+**Name detection is heuristic, not a trained NER model.** For higher recall, plug in your own recognizer (spaCy, Presidio, compromise, wink-nlp…):
+
+```typescript
+new Vela({
+  recognizers: [(text) => myNer(text).map((e) => ({ type: 'PERSON', start: e.start, end: e.end }))],
+});
+```
+
+Court case citations are deliberately **not** masked (public record).
 
 ---
 
 ## Benchmarks
 
-Measured on Node.js v22 (AMD Ryzen 9 / Apple Silicon equivalent):
+Node.js 22, 1,000 iterations on a realistic prompt containing 7 entities:
 
 ```
-=== Vela Privacy Benchmark (1,000 iterations) ===
-
-Masking:
-  Average latency:  0.93 ms / op
-  Throughput:       1,068 ops / sec
-
-Unmasking:
-  Average latency:  0.013 ms / op (13 microseconds!)
-  Throughput:       76,311 ops / sec
-
-ML-KEM-768 Handshake:
-  Average latency:  2.91 ms / handshake
+Masking:       ~1.1 ms / op   (detection + FF1 + placeholders)
+Unmasking:     ~0.05 ms / op
+ML-KEM-768:    ~1.7 ms / keygen + encapsulate
 ```
+
+Run `npm run benchmark` to reproduce.
 
 ---
 
-## Security & Cryptography Specification
+## Security notes
 
-1. **Post-Quantum Key Agreement**: ML-KEM-768 (NIST FIPS 203), standardized by NIST for post-quantum key encapsulation. Defeats **Harvest-Now-Decrypt-Later (HNDL)** attacks.
-2. **Format-Preserving Encryption**: NIST SP 800-38G FF1 implementation. Provides cipher block protection while keeping exact length, character radix, and structural spacing.
-3. **Key Derivation**: HKDF-SHA256 (RFC 5869) derives sub-keys for separate tenant spaces without storing master secrets.
-4. **Key Sealing in Transit**: AES-256-GCM authenticated encryption protects exported keys across network boundaries.
-5. **Zero-PII Telemetry**: Structured JSON logger records entity counts and latencies without ever persisting or leaking raw PII.
+1. **FF1 (NIST SP 800-38G Rev. 1)** is implemented in-house and verified against all nine official NIST FF1 sample vectors (`tests/ff1.test.ts`). Values are encrypted as mixed-radix integers with cycle-walking, which keeps the mapping a bijection. Domains smaller than NIST's 10⁶ minimum are never encrypted; they get a placeholder instead.
+2. **Tweaks** are derived per session and per entity type, so ciphertexts can't be linked across sessions (unless you choose a shared `sessionId`) or across entity types.
+3. **Keys:** with no `fpeKey`, Vela uses a random 32-byte key per process. That's enough, because restoration uses the per-session map rather than decryption. Pass a fixed key (`vela keygen`) only if several processes must produce identical ciphertexts for the same `sessionId`.
+4. **Post-quantum key distribution (optional):** `QuantumKeyManager` uses ML-KEM-768 (FIPS 203) plus HKDF-SHA256 to agree on a shared FPE key between services, and seals keys in transit with AES-256-GCM. The sealing key gets its own HKDF label, and optional AAD is supported. The masking itself is symmetric AES-based FF1, which is not vulnerable to known quantum attacks at 256 bits.
+5. **The proxy listens on loopback by default.** If you expose it, put authentication in front of it.
+6. **Logging** records entity counts and timings only, never values.
+
+## Upgrading from 0.2.x
+
+- Placeholders changed from `<PII type="EMAIL" id="0"/>` to `[EMAIL_1]`. The new form is JSON-safe and numbered per type, starting at 1.
+- `CASE_ID` detection was removed.
+- Without a `sessionId`, masking is no longer deterministic across calls. Use `createSession({ sessionId })` for stable output.
+- FF1 ciphertexts differ from 0.2.x, which used `ff1-js` (not NIST-conformant). The `ff1-js` dependency was removed.
+- `sealFpeKey` / `unsealFpeKey` now derive a dedicated sealing key, so blobs sealed by 0.2.x can't be unsealed by 0.3.
+- The proxy binds to `127.0.0.1` (use `--host` to change).
 
 ---
 

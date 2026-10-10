@@ -1,222 +1,151 @@
 import type { Vela } from '../core/vela.js';
-import { TokenStreamDeMasker } from '../core/streaming.js';
-import type {
-  MaskResult,
-  OpenAIMessage,
-  OpenAIRequest,
-  OpenAIResponse,
-} from '../types.js';
+import { MaskSession } from '../core/session.js';
+import {
+  OpenAiChatStreamUnmasker,
+  ResponsesStreamUnmasker,
+  toRestoreSource,
+  type EventUnmasker,
+  type RestoreSource,
+} from '../core/streaming.js';
+import { maskLlmRequest } from './formats.js';
+import type { MaskResult, OpenAIRequest, OpenAIResponse, SessionOptions } from '../types.js';
+
+type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 /**
- * Mask all string content in an OpenAI request payload.
- * Recursively inspects text messages and tool call arguments.
+ * Mask an OpenAI Chat Completions request (all messages, system prompts,
+ * text parts and tool-call arguments) within ONE session, so placeholders are
+ * unique across messages.
  */
 export function maskOpenAiRequest(
   vela: Vela,
-  request: OpenAIRequest
-): { payload: OpenAIRequest; results: MaskResult[] } {
-  const results: MaskResult[] = [];
-
-  const clonedMessages: OpenAIMessage[] = request.messages.map((msg) => {
-    const newMsg: OpenAIMessage = { ...msg };
-
-    if (typeof msg.content === 'string') {
-      const r = vela.mask(msg.content);
-      newMsg.content = r.text;
-      results.push(r);
-    } else if (Array.isArray(msg.content)) {
-      newMsg.content = msg.content.map((part) => {
-        if (part && typeof part === 'object' && 'type' in part && part.type === 'text' && typeof (part as { text?: unknown }).text === 'string') {
-          const textPart = part as { type: 'text'; text: string };
-          const r = vela.mask(textPart.text);
-          results.push(r);
-          return { ...textPart, text: r.text };
-        }
-        return part;
-      });
-    }
-
-    if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
-      newMsg.tool_calls = msg.tool_calls.map((tc) => {
-        if (tc.function?.arguments && typeof tc.function.arguments === 'string') {
-          const r = vela.mask(tc.function.arguments);
-          results.push(r);
-          return {
-            ...tc,
-            function: {
-              ...tc.function,
-              arguments: r.text,
-            },
-          };
-        }
-        return tc;
-      });
-    }
-
-    return newMsg;
-  });
-
-  const payload: OpenAIRequest = {
-    ...request,
-    messages: clonedMessages,
-  };
-
-  return { payload, results };
+  request: OpenAIRequest,
+  opts: SessionOptions & { session?: MaskSession } = {},
+): { payload: OpenAIRequest; results: MaskResult[]; session: MaskSession } {
+  const session = opts.session ?? vela.createSession(opts);
+  const payload = maskLlmRequest(session, 'openai-chat', request);
+  return { payload, results: [session.toResult()], session };
 }
 
-/**
- * De-mask all string content in an OpenAI response payload.
- */
-export function unmaskOpenAiResponse(
+/** Mask an OpenAI Responses API request (`instructions`, `input` items, function call args/outputs). */
+export function maskOpenAiResponsesRequest<T extends object>(
   vela: Vela,
-  response: OpenAIResponse,
-  results: MaskResult[]
-): OpenAIResponse {
-  if (!response.choices || !Array.isArray(response.choices)) {
-    return response;
-  }
-
-  const clonedChoices = response.choices.map((choice) => {
-    const newChoice = { ...choice };
-    const msg = newChoice.message;
-
-    if (msg) {
-      const newMsg: OpenAIMessage = { ...msg };
-
-      if (typeof msg.content === 'string') {
-        let content = msg.content;
-        for (const r of results) {
-          content = vela.unmask(content, r).text;
-        }
-        newMsg.content = content;
-      }
-
-      if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
-        newMsg.tool_calls = msg.tool_calls.map((tc) => {
-          if (tc.function?.arguments && typeof tc.function.arguments === 'string') {
-            let args = tc.function.arguments;
-            for (const r of results) {
-              args = vela.unmask(args, r).text;
-            }
-            return {
-              ...tc,
-              function: {
-                ...tc.function,
-                arguments: args,
-              },
-            };
-          }
-          return tc;
-        });
-      }
-
-      newChoice.message = newMsg;
-    }
-
-    return newChoice;
-  });
-
-  return {
-    ...response,
-    choices: clonedChoices,
-  };
+  request: T,
+  opts: SessionOptions & { session?: MaskSession } = {},
+): { payload: T; results: MaskResult[]; session: MaskSession } {
+  const session = opts.session ?? vela.createSession(opts);
+  const payload = maskLlmRequest(session, 'openai-responses', request);
+  return { payload, results: [session.toResult()], session };
 }
 
 /**
- * Wrap an AsyncIterable stream from OpenAI completions with real-time de-masking.
+ * Restore originals everywhere in a (Chat Completions or Responses API) response:
+ * message content, refusals, tool-call arguments (JSON-escaped), output items…
  */
-export async function* unmaskOpenAiStream(
-  stream: AsyncIterable<OpenAIResponse>,
-  results: MaskResult[]
-): AsyncIterable<OpenAIResponse> {
-  const deMasker = new TokenStreamDeMasker(results);
+export function unmaskOpenAiResponse<T = OpenAIResponse>(
+  _vela: Vela,
+  response: T,
+  source: MaskSession | MaskResult | MaskResult[],
+): T {
+  return toRestoreSource(source).unmaskValue(response);
+}
 
-  for await (const chunk of stream) {
-    if (!chunk.choices || !Array.isArray(chunk.choices)) {
-      yield chunk;
-      continue;
-    }
-
-    const modifiedChoices = chunk.choices.map((choice) => {
-      const delta = choice.delta;
-      if (delta && typeof delta.content === 'string') {
-        const unmaskedContent = deMasker.feed(delta.content);
-        return {
-          ...choice,
-          delta: {
-            ...delta,
-            content: unmaskedContent,
-          },
-        };
-      }
-      return choice;
-    });
-
-    yield {
-      ...chunk,
-      choices: modifiedChoices,
-    };
+async function* transformStream(
+  stream: AsyncIterable<Json>,
+  unmasker: EventUnmasker,
+): AsyncGenerator<Json> {
+  for await (const ev of stream) {
+    for (const out of unmasker.process(ev)) yield out;
   }
+  for (const out of unmasker.finish()) yield out;
+}
 
-  // Handle remaining buffer on stream completion
-  const flushed = deMasker.flush();
-  if (flushed) {
-    yield {
-      id: 'stream-flush',
-      object: 'chat.completion.chunk',
-      created: Math.floor(Date.now() / 1000),
-      choices: [
-        {
-          index: 0,
-          delta: { content: flushed },
-          finish_reason: null,
-        },
-      ],
-    };
-  }
+/** De-mask a Chat Completions chunk stream (per choice, per tool call, chunk-boundary aware). */
+export function unmaskOpenAiStream(
+  stream: AsyncIterable<Json>,
+  source: MaskSession | MaskResult | MaskResult[],
+): AsyncGenerator<Json> {
+  return transformStream(stream, new OpenAiChatStreamUnmasker(toRestoreSource(source)));
+}
+
+/** De-mask a Responses API event stream. */
+export function unmaskOpenAiResponsesStream(
+  stream: AsyncIterable<Json>,
+  source: MaskSession | MaskResult | MaskResult[],
+): AsyncGenerator<Json> {
+  return transformStream(stream, new ResponsesStreamUnmasker(toRestoreSource(source)));
+}
+
+/**
+ * Wrap a streaming result so iteration is de-masked while the SDK's own Stream
+ * helpers (toReadableStream, controller, …) keep working.
+ */
+export function wrapAsyncIterable<S extends object>(stream: S, unmasker: EventUnmasker): S {
+  const wrapped = Object.create(stream) as S & { [Symbol.asyncIterator]: () => AsyncIterator<Json> };
+  Object.defineProperty(wrapped, Symbol.asyncIterator, {
+    value: () => transformStream(stream as unknown as AsyncIterable<Json>, unmasker)[Symbol.asyncIterator](),
+  });
+  return wrapped;
 }
 
 export interface OpenAICompatibleClient {
   chat: {
     completions: {
-      create: (params: OpenAIRequest, ...rest: unknown[]) => Promise<unknown> | AsyncIterable<unknown>;
+      create: (params: any, ...rest: any[]) => Promise<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
     };
+  };
+  responses?: {
+    create: (params: any, ...rest: any[]) => Promise<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
   };
 }
 
+export interface WrapClientOptions {
+  /** Stable session id per call (e.g. conversation id) — keeps masking consistent across turns. */
+  sessionId?: string | ((params: Json) => string | undefined);
+}
+
+function resolveSessionId(opt: WrapClientOptions['sessionId'], params: Json): string | undefined {
+  return typeof opt === 'function' ? opt(params) : opt;
+}
+
+function isAsyncIterable(x: unknown): x is AsyncIterable<Json> {
+  return !!x && typeof x === 'object' && Symbol.asyncIterator in x;
+}
+
 /**
- * Wrap an OpenAI SDK client instance so create() automatically masks outbound
- * requests and de-masks inbound responses (supporting both sync and streaming).
+ * Wrap an OpenAI client: `chat.completions.create` and `responses.create`
+ * (sync and streaming) are masked on the way out and restored on the way in.
  */
-export function wrapOpenAiClient<T extends OpenAICompatibleClient>(client: T, vela: Vela): T {
+export function wrapOpenAiClient<T extends OpenAICompatibleClient>(client: T, vela: Vela, opts: WrapClientOptions = {}): T {
   const originalCreate = client.chat.completions.create.bind(client.chat.completions);
-
-  const wrappedCreate = (async (
-    params: OpenAIRequest,
-    ...rest: unknown[]
-  ): Promise<unknown> => {
-    const { payload, results } = maskOpenAiRequest(vela, params);
-
-    const result = await (originalCreate as (...args: unknown[]) => Promise<unknown>)(payload, ...rest);
-
-    // Check if result is an async iterable stream
-    if (result && typeof result === 'object' && Symbol.asyncIterator in result) {
-      return unmaskOpenAiStream(result as AsyncIterable<OpenAIResponse>, results);
-    }
-
-    // Standard single-response completion
-    return unmaskOpenAiResponse(vela, result as OpenAIResponse, results);
-  }) as typeof client.chat.completions.create;
-
-  // Use prototype delegation to avoid mutating the original client object
   const wrappedCompletions = Object.create(client.chat.completions);
-  wrappedCompletions.create = wrappedCreate;
-
+  wrappedCompletions.create = async (params: OpenAIRequest, ...rest: unknown[]) => {
+    const sid = resolveSessionId(opts.sessionId, params);
+    const session = vela.createSession(sid !== undefined ? { sessionId: sid } : {});
+    const payload = maskLlmRequest(session, 'openai-chat', params);
+    const result = await originalCreate(payload, ...rest);
+    if (isAsyncIterable(result)) return wrapAsyncIterable(result, new OpenAiChatStreamUnmasker(session));
+    return session.unmaskValue(result);
+  };
   const wrappedChat = Object.create(client.chat);
   wrappedChat.completions = wrappedCompletions;
-
   const wrappedClient = Object.create(client);
   wrappedClient.chat = wrappedChat;
 
+  if (client.responses && typeof client.responses.create === 'function') {
+    const originalResponses = client.responses.create.bind(client.responses);
+    const wrappedResponses = Object.create(client.responses);
+    wrappedResponses.create = async (params: Json, ...rest: unknown[]) => {
+      const sid = resolveSessionId(opts.sessionId, params);
+      const session = vela.createSession(sid !== undefined ? { sessionId: sid } : {});
+      const payload = maskLlmRequest(session, 'openai-responses', params);
+      const result = await originalResponses(payload, ...rest);
+      if (isAsyncIterable(result)) return wrapAsyncIterable(result, new ResponsesStreamUnmasker(session));
+      return session.unmaskValue(result);
+    };
+    wrappedClient.responses = wrappedResponses;
+  }
   return wrappedClient as T;
 }
+
+export type { RestoreSource };

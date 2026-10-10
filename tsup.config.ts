@@ -16,7 +16,7 @@ export default defineConfig([
       'bin/vela-cli': 'bin/vela-cli.ts',
     },
     format: ['cjs'],
-    noExternal: ['ff1-js', '@noble/post-quantum'],
+    noExternal: ['@noble/post-quantum'],
     clean: false,
     sourcemap: false,
     outDir: 'dist',

@@ -1,134 +1,160 @@
+import { randomBytes } from 'node:crypto';
 import { Vela } from '../src/core/vela.js';
 import { QuantumKeyManager } from '../src/core/quantum.js';
 import { runProxy } from '../src/integrations/proxy.js';
+import { PACKAGE_VERSION } from '../src/config/constants.js';
 
-function parseArgs(args: string[]): Record<string, string | boolean> {
-  const result: Record<string, string | boolean> = {};
+const SHORT: Record<string, string> = { p: 'port', u: 'upstream', k: 'key', g: 'glossary', H: 'host', a: 'api-key', h: 'help', v: 'version' };
+const BOOLEAN = new Set(['help', 'version', 'kem', 'json']);
+
+export function parseArgs(args: string[]): { flags: Record<string, string | boolean>; positionals: string[] } {
+  const flags: Record<string, string | boolean> = {};
+  const positionals: string[] = [];
   for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (!arg) continue;
-    if (arg.startsWith('--')) {
-      const key = arg.slice(2);
-      const next = args[i + 1];
-      if (next && !next.startsWith('--')) {
-        result[key] = next;
-        i++;
-      } else {
-        result[key] = true;
+    const arg = args[i] as string;
+    if (arg === '--') {
+      positionals.push(...args.slice(i + 1));
+      break;
+    }
+    if (arg.startsWith('-') && arg.length > 1 && !/^-\d/.test(arg)) {
+      let key = arg.replace(/^--?/, '');
+      let value: string | undefined;
+      const eq = key.indexOf('=');
+      if (eq >= 0) {
+        value = key.slice(eq + 1);
+        key = key.slice(0, eq);
       }
-    } else if (arg.startsWith('-')) {
-      const key = arg.slice(1);
-      const next = args[i + 1];
-      if (next && !next.startsWith('-')) {
-        result[key] = next;
-        i++;
-      } else {
-        result[key] = true;
+      if (!arg.startsWith('--')) key = SHORT[key] ?? key;
+      if (value === undefined && !BOOLEAN.has(key)) {
+        const next = args[i + 1];
+        if (next !== undefined && !next.startsWith('-')) {
+          value = next;
+          i++;
+        }
       }
+      flags[key] = value ?? true;
+    } else {
+      positionals.push(arg);
     }
   }
-  return result;
+  return { flags, positionals };
 }
 
 function printHelp(): void {
   console.log(`
-Vela — Universal LLM Privacy Gateway CLI
+Vela — LLM Privacy Gateway CLI (v${PACKAGE_VERSION})
 
 USAGE:
-  vela [command] [options]
+  vela <command> [options]
 
 COMMANDS:
-  proxy               Start standalone privacy proxy
-  keygen              Generate ML-KEM-768 post-quantum keypair & FPE key
-  mask <text>         Mask PII in input text from CLI
-  help, --help, -h    Show this help message
+  proxy               Start the local privacy proxy (OpenAI Chat/Responses + Anthropic Messages)
+  mask <text>         Mask PII in the given text and show detected entities
+  keygen              Generate a random 32-byte FPE key (add --kem for an ML-KEM-768 keypair)
+  help                Show this help
 
-OPTIONS FOR 'proxy':
-  --port, -p <num>    Proxy port (default: 8787)
-  --upstream, -u <u>  Upstream URL (default: https://api.openai.com)
-  --key, -k <hex>     Hex-encoded 32-byte FPE key (default: auto-generates ephemeral key)
-  --glossary, -g <s>  Comma-separated list of confidential terms
+PROXY OPTIONS:
+  --port, -p <num>      Port (default: 8787)
+  --host, -H <addr>     Interface to bind (default: 127.0.0.1 — loopback only)
+  --upstream, -u <url>  Upstream base URL (default: OpenAI; Anthropic paths auto-route to api.anthropic.com)
+  --api-key, -a <key>   Upstream API key to inject (otherwise the client's own key is forwarded)
+  --key, -k <hex>       32-byte FPE key as 64 hex chars (or env VELA_FPE_KEY; default: random per process)
+  --glossary, -g <s>    Comma-separated confidential terms to always mask
+
+  Send header "x-vela-session: <conversation-id>" to keep masking stable across turns.
+
+MASK OPTIONS:
+  --glossary, -g <s>    Comma-separated confidential terms
+  --json                Print machine-readable JSON
 
 EXAMPLES:
   $ npx vela-privacy proxy --port 8787
-  $ npx vela-privacy keygen
   $ npx vela-privacy mask "My email is alice@company.com and Aadhaar 2345 6789 0124"
+  $ npx vela-privacy keygen
 `);
 }
 
-async function main(): Promise<void> {
-  const argv = process.argv.slice(2);
-  const flags = parseArgs(argv);
-  const command = argv.find((a) => !a.startsWith('-')) ?? 'help';
+function readKey(flags: Record<string, string | boolean>): Uint8Array | undefined {
+  const k = flags['key'] ?? process.env['VELA_FPE_KEY'];
+  if (typeof k !== 'string') return undefined;
+  const key = new Uint8Array(Buffer.from(k, 'hex'));
+  if (key.length !== 32 || !/^[0-9a-fA-F]{64}$/.test(k)) {
+    console.error('Error: key must be exactly 32 bytes (64 hex characters).');
+    process.exit(1);
+  }
+  return key;
+}
 
-  if (command === 'help' || flags['help'] || flags['h']) {
+const glossaryOf = (flags: Record<string, string | boolean>): string[] | undefined =>
+  typeof flags['glossary'] === 'string' ? flags['glossary'].split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+
+async function main(): Promise<void> {
+  const { flags, positionals } = parseArgs(process.argv.slice(2));
+  const command = positionals[0] ?? 'help';
+
+  if (flags['version']) {
+    console.log(PACKAGE_VERSION);
+    return;
+  }
+  if (command === 'help' || flags['help']) {
     printHelp();
-    process.exit(0);
+    return;
   }
 
   if (command === 'keygen') {
-    const keyPair = QuantumKeyManager.generateKeyPair();
-    const { sharedSecret } = QuantumKeyManager.encapsulate(keyPair.publicKey);
-    const fpeKey = QuantumKeyManager.deriveFpeKey(sharedSecret);
-
-    console.log('\n--- Vela Quantum Key Generation ---');
-    console.log('Algorithm: ML-KEM-768 (NIST FIPS 203) + HKDF-SHA256');
-    console.log(`FPE Key (32 bytes Hex): ${Buffer.from(fpeKey).toString('hex')}`);
-    console.log(`Public Key (Hex):       ${Buffer.from(keyPair.publicKey).toString('hex').slice(0, 48)}... (truncated)`);
-    console.log(`Secret Key (Hex):       ${Buffer.from(keyPair.secretKey).toString('hex').slice(0, 48)}... (truncated)`);
-    console.log('\nUse this key by setting VELA_FPE_KEY=<hex> or passing --key <hex>\n');
+    if (flags['kem']) {
+      const kp = QuantumKeyManager.generateKeyPair();
+      console.log(JSON.stringify({
+        algorithm: 'ML-KEM-768 (FIPS 203)',
+        publicKey: Buffer.from(kp.publicKey).toString('hex'),
+        secretKey: Buffer.from(kp.secretKey).toString('hex'),
+      }, null, 2));
+      console.error('Keep secretKey private. Peers encapsulate to publicKey; derive the FPE key with QuantumKeyManager.deriveFpeKey().');
+      return;
+    }
+    console.log(randomBytes(32).toString('hex'));
+    console.error('Use with --key <hex> or VELA_FPE_KEY=<hex>. Store it like any other secret.');
     return;
   }
 
   if (command === 'mask') {
-    const textToMask = argv.slice(1).filter((a) => !a.startsWith('-')).join(' ');
-    if (!textToMask) {
-      console.error('Error: Please provide text to mask.');
+    const text = positionals.slice(1).join(' ');
+    if (!text) {
+      console.error('Error: please provide text to mask.');
       process.exit(1);
     }
-
-    const kp = QuantumKeyManager.generateKeyPair();
-    const { sharedSecret } = QuantumKeyManager.encapsulate(kp.publicKey);
-    const fpeKey = QuantumKeyManager.deriveFpeKey(sharedSecret);
-
-    const vela = new Vela({ fpeKey });
-    const masked = vela.mask(textToMask);
-
+    const key = readKey(flags);
+    const glossary = glossaryOf(flags);
+    const vela = new Vela({ ...(key ? { fpeKey: key } : {}), ...(glossary ? { glossary } : {}) });
+    const masked = vela.mask(text);
+    if (flags['json']) {
+      console.log(JSON.stringify({ text: masked.text, replacements: masked.replacements }, null, 2));
+      return;
+    }
     console.log('\n--- Masked Output ---');
     console.log(masked.text);
-    console.log('\n--- Detected Entities ---');
-    console.dir(masked.entities, { depth: null });
+    console.log('\n--- Replacements ---');
+    for (const r of masked.replacements ?? []) console.log(`  ${r.type.padEnd(14)} ${r.method.padEnd(5)} ${r.original}  →  ${r.masked}`);
+    console.log('');
     return;
   }
 
   if (command === 'proxy') {
-    const port = typeof flags['port'] === 'string' ? parseInt(flags['port'], 10) : 8787;
-    const upstream = typeof flags['upstream'] === 'string' ? flags['upstream'] : undefined;
-    const glossary = typeof flags['glossary'] === 'string' ? flags['glossary'].split(',').map((s) => s.trim()) : undefined;
-
-    let fpeKey: Uint8Array;
-    const keyFlag = flags['key'] ?? flags['k'] ?? process.env.VELA_FPE_KEY;
-
-    if (typeof keyFlag === 'string') {
-      fpeKey = new Uint8Array(Buffer.from(keyFlag, 'hex'));
-      if (fpeKey.length !== 32) {
-        console.error('Error: Provided key must be exactly 32 bytes (64 hex characters).');
-        process.exit(1);
-      }
-    } else {
-      console.log('[vela] No key provided — generating ephemeral ML-KEM-768 session key');
-      const kp = QuantumKeyManager.generateKeyPair();
-      const { sharedSecret } = QuantumKeyManager.encapsulate(kp.publicKey);
-      fpeKey = QuantumKeyManager.deriveFpeKey(sharedSecret);
+    const port = typeof flags['port'] === 'string' ? parseInt(flags['port'], 10) : undefined;
+    if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+      console.error('Error: --port must be 1-65535');
+      process.exit(1);
     }
-
-    const vela = new Vela({
-      fpeKey,
-      glossary,
-      enableLogging: true,
+    const key = readKey(flags);
+    if (!key) console.log('[vela] No --key provided — using a random key for this process.');
+    const glossary = glossaryOf(flags);
+    const vela = new Vela({ ...(key ? { fpeKey: key } : {}), ...(glossary ? { glossary } : {}), enableLogging: true });
+    runProxy(vela, {
+      ...(port !== undefined ? { port } : {}),
+      ...(typeof flags['host'] === 'string' ? { host: flags['host'] } : {}),
+      ...(typeof flags['upstream'] === 'string' ? { upstream: flags['upstream'] } : {}),
+      ...(typeof flags['api-key'] === 'string' ? { apiKey: flags['api-key'] } : {}),
     });
-
-    runProxy(vela, { port, upstream });
     return;
   }
 
@@ -138,6 +164,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error('Fatal CLI Error:', err);
+  console.error('Fatal CLI Error:', err instanceof Error ? err.message : err);
   process.exit(1);
 });

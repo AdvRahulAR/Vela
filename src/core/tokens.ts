@@ -1,66 +1,55 @@
 import type { DetectedEntity } from '../types.js';
 
 /**
- * Vela token masker for soft PII (names, locations, orgs, secrets).
- * Replaces detected soft PII with stable, reversible tokens like
- * `<PII type="PERSON" id="1"/>` so LLMs retain semantic context.
+ * Low-level token masker for soft PII. Replaces entities with reversible,
+ * JSON-safe placeholders such as `[PERSON_1]` or `[EMAIL_2]`.
+ *
+ * Prefer `Vela#createSession()`, which also handles FPE and multi-message
+ * consistency; this class is kept for backwards compatibility.
  */
 export class TokenMasker {
   private map: Map<string, string> = new Map(); // token -> original
-  private reverse: Map<string, string> = new Map(); // original -> token
-  private counter = 0;
+  private reverse: Map<string, string> = new Map(); // type+original -> token
+  private counters: Map<string, number> = new Map();
 
-  /**
-   * Mask soft PII entities in text with reversible tokens.
-   */
-  mask(
-    text: string,
-    entities: DetectedEntity[]
-  ): { text: string; mapping: Record<string, string> } {
-    // Sort descending by start index to prevent offset shifting during replacements
-    const sorted = [...entities].sort((a, b) => b.start - a.start);
-    let out = text;
-
+  mask(text: string, entities: DetectedEntity[]): { text: string; mapping: Record<string, string> } {
+    const sorted = [...entities].sort((a, b) => a.start - b.start);
+    let out = '';
+    let pos = 0;
     for (const e of sorted) {
-      const original = text.slice(e.start, e.end);
-      const token = this.tokenFor(original, e.type);
-      out = out.slice(0, e.start) + token + out.slice(e.end);
+      if (e.start < pos) continue;
+      out += text.slice(pos, e.start) + this.tokenFor(text.slice(e.start, e.end), String(e.type), text);
+      pos = e.end;
     }
-
-    return {
-      text: out,
-      mapping: Object.fromEntries(this.map),
-    };
+    return { text: out + text.slice(pos), mapping: Object.fromEntries(this.map) };
   }
 
-  /**
-   * Restore original values from tokens.
-   */
   unmask(text: string, mapping: Record<string, string>): string {
     let out = text;
-    for (const [token, original] of Object.entries(mapping)) {
-      out = out.split(token).join(original);
-    }
+    for (const [token, original] of Object.entries(mapping)) out = out.split(token).join(original);
     return out;
   }
 
-  /**
-   * Reset internal session counters and mappings.
-   */
   reset(): void {
     this.map.clear();
     this.reverse.clear();
-    this.counter = 0;
+    this.counters.clear();
   }
 
-  private tokenFor(original: string, type: string): string {
-    const existing = this.reverse.get(original);
+  private tokenFor(original: string, type: string, text: string): string {
+    const key = `${type}\u0000${original}`;
+    const existing = this.reverse.get(key);
     if (existing) return existing;
-
-    const token = `<PII type="${type}" id="${this.counter}"/>`;
-    this.counter++;
+    const base = type.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+    let n = this.counters.get(base) ?? 0;
+    let token: string;
+    do {
+      n++;
+      token = `[${base}_${n}]`;
+    } while (this.map.has(token) || text.includes(token));
+    this.counters.set(base, n);
     this.map.set(token, original);
-    this.reverse.set(original, token);
+    this.reverse.set(key, token);
     return token;
   }
 }

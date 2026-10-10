@@ -26,3 +26,19 @@ export function validateLuhn(input: string): boolean {
 
   return sum % 10 === 0;
 }
+
+/** Compute the Luhn check digit for a numeric payload (without check digit). */
+export function luhnCheckDigit(payload: string): number {
+  let sum = 0;
+  let double = true;
+  for (let i = payload.length - 1; i >= 0; i--) {
+    let n = Number(payload[i]);
+    if (double) {
+      n *= 2;
+      if (n > 9) n -= 9;
+    }
+    sum += n;
+    double = !double;
+  }
+  return (10 - (sum % 10)) % 10;
+}

@@ -27,8 +27,8 @@ describe('Vela Privacy Engine Pipeline', () => {
     assert.doesNotMatch(masked.text, new RegExp(validAadhaar));
 
     // Token replacement checks
-    assert.match(masked.text, /<PII type="EMAIL" id="\d+"\/>/);
-    assert.match(masked.text, /<PII type="CUSTOM" id="\d+"\/>/);
+    assert.match(masked.text, /\[EMAIL_\d+\]/);
+    assert.match(masked.text, /\[CUSTOM_\d+\]/);
 
     // Round-trip unmasking
     const unmasked = vela.unmask(masked.text, masked);
@@ -50,10 +50,10 @@ describe('Vela Privacy Engine Pipeline', () => {
     assert.equal(unmasked.restored, 2);
   });
 
-  it('should auto-derive an ephemeral quantum key when fpeKey is omitted', () => {
+  it('should generate an ephemeral random key when fpeKey is omitted', () => {
     const autoVela = new Vela();
     const masked = autoVela.mask('User email is test@domain.com');
-    assert.match(masked.text, /<PII type="EMAIL" id="\d+"\/>/);
+    assert.match(masked.text, /\[EMAIL_\d+\]/);
 
     const unmasked = autoVela.unmask(masked.text, masked);
     assert.equal(unmasked.text, 'User email is test@domain.com');
@@ -64,9 +64,9 @@ describe('Vela Privacy Engine Pipeline', () => {
     const mask1 = sessionVela.mask('Email 1 is first@domain.com');
     const mask2 = sessionVela.mask('Email 2 is second@domain.com');
 
-    // Both independent calls should start at id="0" for their first token
-    assert.ok(mask1.mapping['<PII type="EMAIL" id="0"/>']);
-    assert.ok(mask2.mapping['<PII type="EMAIL" id="0"/>']);
+    // Both independent calls get their own session, starting at [EMAIL_1]
+    assert.ok(mask1.mapping['[EMAIL_1]']);
+    assert.ok(mask2.mapping['[EMAIL_1]']);
 
     // Neither should bleed mapping into the other
     assert.equal(Object.keys(mask1.mapping).length, 1);

@@ -7,7 +7,7 @@ describe('Streaming De-masker', () => {
   const mockResult: MaskResult = {
     text: '',
     mapping: {
-      '<PII type="EMAIL" id="0"/>': 'alice@company.com',
+      '[EMAIL_1]': 'alice@company.com',
     },
     fpeMap: {
       'ABCDE1234F': 'ZXCVB9876Y',
@@ -18,10 +18,10 @@ describe('Streaming De-masker', () => {
   it('should unmask tokens when split across chunks', () => {
     const deMasker = new TokenStreamDeMasker(mockResult);
 
-    // Split token "<PII type=\"EMAIL\" id=\"0\"/>" across 3 chunks
-    const chunk1 = 'Contact information: <PII typ';
-    const chunk2 = 'e="EMAIL" id';
-    const chunk3 = '="0"/> for follow-up.';
+    // Split token "[EMAIL_1]" across 3 chunks
+    const chunk1 = 'Contact information: [EMA';
+    const chunk2 = 'IL_';
+    const chunk3 = '1] for follow-up.';
 
     const out1 = deMasker.feed(chunk1);
     const out2 = deMasker.feed(chunk2);
@@ -52,8 +52,8 @@ describe('Streaming De-masker', () => {
   it('should process SSE formatted event streams', () => {
     const sseDeMasker = createSseDeMasker(mockResult);
 
-    const sseEvent1 = `data: {"choices":[{"delta":{"content":"User email is <PII ty"}}]}\n\n`;
-    const sseEvent2 = `data: {"choices":[{"delta":{"content":"pe=\\"EMAIL\\" id=\\"0\\"/> and tax "}}]}\n\n`;
+    const sseEvent1 = `data: {"choices":[{"delta":{"content":"User email is [EMA"}}]}\n\n`;
+    const sseEvent2 = `data: {"choices":[{"delta":{"content":"IL_1] and tax "}}]}\n\n`;
     const sseDone = `data: [DONE]\n\n`;
 
     const res1 = sseDeMasker(sseEvent1);
