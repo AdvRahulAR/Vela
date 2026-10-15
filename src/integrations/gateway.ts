@@ -161,3 +161,46 @@ export function nodeHeadersToWeb(h: Record<string, string | string[] | undefined
   }
   return out;
 }
+
+/** True for the embeddings endpoint, whose `input` text is masked before forwarding. */
+export function isEmbeddingsPath(pathname: string): boolean {
+  return /\/embeddings$/.test(pathname.replace(/\/+$/, ''));
+}
+
+/**
+ * Forward a non-chat route (e.g. `/v1/models`, `/v1/embeddings`) upstream.
+ * Embeddings `input` text is masked (the response is vectors, so there is
+ * nothing to restore); everything else is passed through untouched.
+ */
+export async function forwardPassthrough(vela: Vela, req: ForwardRequest, opts: ForwardOptions = {}): Promise<Response> {
+  const doFetch = opts.fetchImpl ?? fetch;
+  const url = new URL(req.url);
+  let body: string | undefined = req.body;
+  if (body && req.method.toUpperCase() === 'POST' && isEmbeddingsPath(url.pathname)) {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    const session = vela.createSession({});
+    if (typeof parsed.input === 'string') parsed.input = session.mask(parsed.input);
+    else if (Array.isArray(parsed.input)) {
+      parsed.input = parsed.input.map((v) => (typeof v === 'string' ? session.mask(v) : v));
+    }
+    body = JSON.stringify(parsed);
+  }
+
+  const headers = new Headers(req.headers);
+  for (const k of STRIP_REQUEST_HEADERS) headers.delete(k);
+  if (opts.apiKey) {
+    if (url.hostname === 'api.anthropic.com') headers.set('x-api-key', opts.apiKey);
+    else headers.set('authorization', `Bearer ${opts.apiKey}`);
+  }
+  const upstream = await doFetch(req.url, {
+    method: req.method,
+    headers,
+    ...(body !== undefined && !['GET', 'HEAD'].includes(req.method.toUpperCase()) ? { body } : {}),
+    ...(req.signal ? { signal: req.signal } : {}),
+  });
+  return new Response(upstream.body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers: sanitizeResponseHeaders(upstream.headers),
+  });
+}

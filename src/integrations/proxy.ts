@@ -3,7 +3,7 @@ import type { Vela } from '../core/vela.js';
 import { DEFAULT_ANTHROPIC_URL, DEFAULT_PROXY_HOST, DEFAULT_PROXY_PORT, DEFAULT_UPSTREAM_URL, PACKAGE_VERSION } from '../config/constants.js';
 import { Logger } from '../utils/logger.js';
 import { detectApiFormat } from './formats.js';
-import { forwardLlmRequest, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
+import { isEmbeddingsPath, forwardLlmRequest, forwardPassthrough, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
 import type { ProxyServerOptions } from '../types.js';
 
 function sendJson(res: import('node:http').ServerResponse, status: number, body: unknown): void {
@@ -39,7 +39,8 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
       return;
     }
 
-    if (req.method !== 'POST' || !detectApiFormat(urlPath)) {
+    const isLlmRoute = req.method === 'POST' && detectApiFormat(urlPath) !== null;
+    if (!isLlmRoute && opts.passthrough === false) {
       sendJson(res, 404, { error: { message: `Route ${req.method} ${urlPath} not found` } });
       return;
     }
@@ -57,6 +58,43 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
       chunks.push(b);
     }
     const body = Buffer.concat(chunks).toString('utf8');
+
+    if (!isLlmRoute) {
+      const controller = new AbortController();
+      res.on('close', () => {
+        if (!res.writableEnded) controller.abort();
+      });
+      try {
+        const method = req.method ?? 'GET';
+        const payload: string | undefined = body || undefined;
+        if (payload && method === 'POST' && isEmbeddingsPath(urlPath)) JSON.parse(payload);
+        const response = await forwardPassthrough(
+          vela,
+          {
+            url: upstream + rawUrl,
+            method,
+            headers: nodeHeadersToWeb(req.headers),
+            ...(payload !== undefined ? { body: payload } : {}),
+            signal: controller.signal,
+          },
+          opts.apiKey ? { apiKey: opts.apiKey } : {},
+        );
+        await pipeResponseToNode(response, res);
+      } catch (err) {
+        if (res.headersSent) {
+          res.end();
+          return;
+        }
+        if (err instanceof SyntaxError) {
+          sendJson(res, 400, { error: { message: 'Invalid JSON payload' } });
+          return;
+        }
+        const msg = err instanceof Error ? err.message : 'Unknown proxy error';
+        sendJson(res, 502, { error: { message: `Vela gateway proxy failure: ${msg}`, type: 'gateway_error' } });
+      }
+      return;
+    }
+
     try {
       JSON.parse(body);
     } catch {

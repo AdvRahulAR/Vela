@@ -28,8 +28,25 @@ function mapTextParts(parts: unknown, visit: Visit): unknown {
   });
 }
 
+/** Tool/function definitions: descriptions and JSON-schema leaves (defaults, enums, examples) can hold PII. */
+function walkTools(tools: unknown, visit: Visit): unknown {
+  if (!Array.isArray(tools)) return tools;
+  const one = (t: Json): Json => {
+    if (!t || typeof t !== 'object') return t;
+    const o: Json = { ...t };
+    if (typeof o.description === 'string') o.description = visit(o.description, 'text');
+    for (const k of ['input_schema', 'parameters']) {
+      if (o[k] !== undefined && o[k] !== null) o[k] = visit(o[k], 'value');
+    }
+    if (o.function && typeof o.function === 'object') o.function = one(o.function);
+    return o;
+  };
+  return tools.map(one);
+}
+
 function walkOpenAiChat(body: Json, visit: Visit): Json {
-  if (!Array.isArray(body.messages)) return body;
+  const withTools: Json = body.tools !== undefined ? { ...body, tools: walkTools(body.tools, visit) } : body;
+  if (!Array.isArray(body.messages)) return withTools;
   const messages = body.messages.map((msg: Json) => {
     if (!msg || typeof msg !== 'object') return msg;
     const m: Json = { ...msg };
@@ -46,11 +63,12 @@ function walkOpenAiChat(body: Json, visit: Visit): Json {
     }
     return m;
   });
-  return { ...body, messages };
+  return { ...withTools, messages };
 }
 
 function walkResponses(body: Json, visit: Visit): Json {
   const out: Json = { ...body };
+  if (out.tools !== undefined) out.tools = walkTools(out.tools, visit);
   if (typeof out.instructions === 'string') out.instructions = visit(out.instructions, 'text');
   if (typeof out.input === 'string') out.input = visit(out.input, 'text');
   else if (Array.isArray(out.input)) {
@@ -93,6 +111,7 @@ function walkAnthropicBlocks(content: unknown, visit: Visit): unknown {
 function walkAnthropic(body: Json, visit: Visit): Json {
   const out: Json = { ...body };
   if (out.system !== undefined) out.system = walkAnthropicBlocks(out.system, visit);
+  if (out.tools !== undefined) out.tools = walkTools(out.tools, visit);
   if (Array.isArray(out.messages)) {
     out.messages = out.messages.map((m: Json) =>
       m && typeof m === 'object' && m.content !== undefined ? { ...m, content: walkAnthropicBlocks(m.content, visit) } : m,

@@ -15,6 +15,8 @@ export type StandardEntityType =
   | 'BANK_ACCOUNT'
   | 'IFSC'
   | 'PASSPORT'
+  | 'VOTER_ID'
+  | 'DRIVING_LICENCE'
   | 'UPI_ID'
   | 'DATE_OF_BIRTH'
   | 'PIN_CODE'
@@ -214,4 +216,6 @@ export interface ProxyServerOptions {
   /** Upstream API key. Sent as `Authorization: Bearer` (OpenAI) or `x-api-key` (Anthropic). */
   apiKey?: string;
   maxBodySizeBytes?: number;
+  /** Forward non-chat routes (/v1/models, /v1/embeddings…) upstream. Default: true. Set false to 404 them. */
+  passthrough?: boolean;
 }

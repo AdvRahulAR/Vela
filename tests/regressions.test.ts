@@ -484,3 +484,82 @@ describe('Key sealing', () => {
     assert.throws(() => Buffer.concat([raw.update(sealed.data), raw.final()]));
   });
 });
+
+describe('0.3.1 gap fixes', () => {
+  it('masks xapp- Slack app tokens', () => {
+    const tok = 'xapp-1-A0123456789-1234567890123-' + 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6';
+    const r = vela.mask(`token ${tok} end`);
+    assert.ok(!r.text.includes('a1b2c3d4'), r.text);
+  });
+
+  it('masks PII in tool descriptions and schemas (Anthropic + OpenAI)', () => {
+    const anth = maskAnthropicRequest(vela, {
+      model: 'm',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [{ name: 't', description: 'Look up PAN ABCDE1234F', input_schema: { type: 'object', properties: { p: { type: 'string', default: 'ABCDE1234F' } } } }],
+    });
+    assert.ok(!JSON.stringify(anth.payload).includes('ABCDE1234F'));
+    const oai = maskOpenAiRequest(vela, {
+      model: 'm',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [{ type: 'function', function: { name: 't', description: 'Look up PAN ABCDE1234F', parameters: { type: 'object', properties: {} } } }],
+    } as never);
+    assert.ok(!JSON.stringify(oai.payload).includes('ABCDE1234F'));
+  });
+
+  it('literal placeholder-shaped text in one message cannot collide with a real token', () => {
+    const s = vela.createSession();
+    const a = s.mask('Literal tag [EMAIL_1] here');
+    const b = s.mask('Mail bob@example.com');
+    assert.equal(a, 'Literal tag [EMAIL_1] here');
+    assert.ok(!b.includes('[EMAIL_1]'), b);
+    assert.equal(s.unmask(b).text, 'Mail bob@example.com');
+  });
+
+  it('detects voter ID (context-gated) and driving licence', () => {
+    assert.ok(detectPii('Voter ID: ABC1234567').some((e) => e.type === 'VOTER_ID'));
+    assert.ok(!detectPii('Code ABC1234567 shipped').some((e) => e.type === 'VOTER_ID'));
+    assert.ok(detectPii('DL KL07 20110012345 issued').some((e) => e.type === 'DRIVING_LICENCE'));
+    assert.ok(detectPii('licence MH-12-2011-0012345').some((e) => e.type === 'DRIVING_LICENCE'));
+    const r = vela.mask('Voter ID: ABC1234567');
+    assert.ok(!r.text.includes('ABC1234567'));
+  });
+
+  it('proxy forwards non-chat routes and masks embeddings input; --no-passthrough 404s', async () => {
+    const seen: Array<{ method: string; url: string; body: string }> = [];
+    const up = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const c of req) chunks.push(c as Buffer);
+      seen.push({ method: req.method ?? '', url: req.url ?? '', body: Buffer.concat(chunks).toString('utf8') });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: [] }));
+    });
+    const upPort = await listen(up);
+    const proxy = runProxy(vela, { port: 0, upstream: `http://127.0.0.1:${upPort}` });
+    const strict = runProxy(vela, { port: 0, upstream: `http://127.0.0.1:${upPort}`, passthrough: false });
+    await Promise.all([proxy, strict].map((p) => new Promise((r) => p.once('listening', r))));
+    const base = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`;
+    const strictBase = `http://127.0.0.1:${(strict.address() as AddressInfo).port}`;
+    try {
+      const m = await fetch(`${base}/v1/models?limit=2`);
+      assert.equal(m.status, 200);
+      assert.equal(seen[0]?.method, 'GET');
+      assert.equal(seen[0]?.url, '/v1/models?limit=2');
+
+      const e = await fetch(`${base}/v1/embeddings`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'm', input: ['PAN ABCDE1234F', 'plain'] }),
+      });
+      assert.equal(e.status, 200);
+      assert.ok(!seen[1]?.body.includes('ABCDE1234F'), seen[1]?.body);
+      assert.ok(seen[1]?.body.includes('plain'));
+
+      assert.equal((await fetch(`${strictBase}/v1/models`)).status, 404);
+    } finally {
+      proxy.close();
+      strict.close();
+      up.close();
+    }
+  });
+});

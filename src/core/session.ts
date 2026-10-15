@@ -31,6 +31,8 @@ export class MaskSession {
   private readonly byOriginal = new Map<string, Replacement>();
   private readonly byMasked = new Map<string, Replacement>();
   private readonly knownNames = new Set<string>();
+  /** Placeholder-shaped strings already present in user input; never issued as real tokens. */
+  private readonly reserved = new Set<string>();
   private readonly allEntities: DetectedEntity[] = [];
   private restorer: Restorer | null = null;
 
@@ -56,7 +58,9 @@ export class MaskSession {
    * where they are re-mentioned in earlier messages.
    */
   learn(text: string, prefix?: string): void {
-    if (!text || this.engine.detect.detectNames === false) return;
+    if (!text) return;
+    this.reserveLiteralTokens(text);
+    if (this.engine.detect.detectNames === false) return;
     const ents = detectPii(text, { ...this.engine.detect, knownNames: this.knownNames, ...(prefix ? { prefix } : {}) });
     for (const n of nameComponents(ents)) this.knownNames.add(n);
   }
@@ -64,6 +68,7 @@ export class MaskSession {
   /** Mask one string. */
   mask(text: string, prefix?: string): string {
     if (!text) return text;
+    this.reserveLiteralTokens(text);
     const entities = detectPii(text, {
       ...this.engine.detect,
       knownNames: this.knownNames,
@@ -191,9 +196,13 @@ export class MaskSession {
     do {
       n++;
       token = `[${base}_${n}]`;
-    } while (this.byMasked.has(token) || text.includes(token));
+    } while (this.byMasked.has(token) || this.reserved.has(token) || text.includes(token));
     this.counters.set(base, n);
     return token;
+  }
+
+  private reserveLiteralTokens(text: string): void {
+    for (const m of text.matchAll(/\[[A-Z][A-Z0-9_]*_\d+\]/g)) this.reserved.add(m[0]);
   }
 }
 

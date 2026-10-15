@@ -17,6 +17,8 @@ export const DEFAULT_FPE_TYPES: EntityType[] = [
 export const DEFAULT_TOKEN_TYPES: EntityType[] = [
   'EMAIL',
   'UPI_ID',
+  'VOTER_ID',
+  'DRIVING_LICENCE',
   'PERSON',
   'ADDRESS',
   'DATE_OF_BIRTH',
@@ -28,7 +30,7 @@ export const DEFAULT_TOKEN_TYPES: EntityType[] = [
   'CUSTOM',
 ];
 
-export const PACKAGE_VERSION = '0.3.0';
+export const PACKAGE_VERSION = '0.3.1';
 
 export const DIGITS = '0123456789';
 export const UPPER_ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';

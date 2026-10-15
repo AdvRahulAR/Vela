@@ -18,7 +18,7 @@ Plain redaction (`[REDACTED]`) destroys the structure an LLM needs to reason abo
 
 - **Structured IDs** (Aadhaar, PAN, GSTIN, cards, phones, IBAN, SSN, IPs, bank accounts…) are encrypted with **NIST FF1 format-preserving encryption**. The result has the same length, separators and character classes, **and is still structurally valid**: Aadhaar passes Verhoeff, cards pass Luhn and keep their brand digit, GSTINs get a valid check character, IBANs get valid check digits, phones keep their country code.
 - **Everything else** (names, emails, addresses, dates of birth, UPI IDs, secrets, your own glossary terms) becomes a readable, reversible placeholder like `[PERSON_1]` or `[EMAIL_2]`.
-- **Fail-closed:** if a detected value can't be format-preserved safely, it becomes a placeholder. Nothing detected is ever passed through.
+- **Fail-closed:** if a detected value can't be format-preserved safely, it becomes a placeholder. Anything *detected* is never passed through (detection itself is pattern- and heuristic-based, so check the table below for what is and isn't covered).
 - **Restoration is tolerant:** if the model reformats a value (drops spaces, changes case, writes `EMAIL_1` without brackets), Vela still restores it. It also works mid-stream.
 
 ```
@@ -134,6 +134,8 @@ npx vela-privacy keygen --kem                      # full ML-KEM-768 keypair (JS
 
 Point `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` (or the Anthropic SDK's `baseURL=http://127.0.0.1:8787`) at it. If you don't pass `--upstream`, Anthropic paths go to `api.anthropic.com` and everything else goes to `api.openai.com`.
 
+**Routes:** `/chat/completions`, `/responses` and `/messages` are masked and restored. `/embeddings` input is masked before forwarding. Every other route (e.g. `GET /v1/models`) is forwarded to the upstream untouched; pass `--no-passthrough` to return 404 for them instead.
+
 ---
 
 ## What is detected
@@ -147,6 +149,8 @@ Point `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` (or the Anthropic SDK's `baseUR
 | Passport | letter + 7 digits / alnum, after "passport" | FF1 |
 | Bank account | 9–18 digits after "a/c", "account", "bank"… | FF1 |
 | UPI ID | `name@bank` | placeholder |
+| Voter ID (EPIC) | 3 letters + 7 digits, after "voter" / "EPIC" / "election" | placeholder |
+| Driving licence | state + RTO + year + 7-digit serial (`KL07 20110012345`) | placeholder |
 | Credit / debit card | 13–19 digits + **Luhn** | FF1, brand digit kept, valid Luhn |
 | IBAN | compact or spaced + **mod-97** | FF1, valid check digits |
 | Phone | Indian mobile/landline, E.164 international, North American | FF1, country code kept |

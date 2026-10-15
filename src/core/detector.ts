@@ -60,7 +60,7 @@ const BUILTIN_PATTERNS: PatternDef[] = [
   {
     type: 'SECRET_KEY',
     regex:
-      /\b(?:sk-proj-[A-Za-z0-9_-]+|sk-ant-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9_]+|(?:gho|ghu|ghs|ghr)_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{20,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[0-9A-Za-z-]{10,72})\b/g,
+      /\b(?:sk-proj-[A-Za-z0-9_-]+|sk-ant-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9_]+|(?:gho|ghu|ghs|ghr)_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{20,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[0-9A-Za-z-]{10,72}|xapp-\d-[A-Z0-9]+-\d+-[0-9A-Za-z]{20,})\b/g,
     confidence: 1,
   },
   {
@@ -91,6 +91,18 @@ const BUILTIN_PATTERNS: PatternDef[] = [
     regex: /\b[A-Z][0-9]{7}\b|\b(?=[A-Z0-9]*\d)[A-Z0-9]{6,9}\b/g,
     confidence: 0.95,
     context: { require: /\bpassport\b[^\n]{0,25}$/i, window: 40 },
+  },
+  {
+    type: 'VOTER_ID',
+    regex: /\b[A-Z]{3}\d{7}\b/g,
+    confidence: 0.95,
+    context: { require: /\b(?:voter|epic|election|electoral)\b[^\n]{0,30}$/i, window: 50 },
+  },
+  {
+    // State code + RTO code + year + 7-digit serial, e.g. KL07 20110012345 / MH-12-2011-0012345
+    type: 'DRIVING_LICENCE',
+    regex: /\b[A-Z]{2}[ -]?\d{2}[ -]?(?:19|20)\d{2}[ -]?\d{7}\b/g,
+    confidence: 0.95,
   },
   {
     type: 'UPI_ID',

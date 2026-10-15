@@ -5,7 +5,7 @@ import { runProxy } from '../src/integrations/proxy.js';
 import { PACKAGE_VERSION } from '../src/config/constants.js';
 
 const SHORT: Record<string, string> = { p: 'port', u: 'upstream', k: 'key', g: 'glossary', H: 'host', a: 'api-key', h: 'help', v: 'version' };
-const BOOLEAN = new Set(['help', 'version', 'kem', 'json']);
+const BOOLEAN = new Set(['help', 'version', 'kem', 'json', 'no-passthrough']);
 
 export function parseArgs(args: string[]): { flags: Record<string, string | boolean>; positionals: string[] } {
   const flags: Record<string, string | boolean> = {};
@@ -58,6 +58,8 @@ PROXY OPTIONS:
   --host, -H <addr>     Interface to bind (default: 127.0.0.1 — loopback only)
   --upstream, -u <url>  Upstream base URL (default: OpenAI; Anthropic paths auto-route to api.anthropic.com)
   --api-key, -a <key>   Upstream API key to inject (otherwise the client's own key is forwarded)
+  --no-passthrough      Return 404 for routes other than chat/responses/messages (default: forward them,
+                        masking /v1/embeddings input)
   --key, -k <hex>       32-byte FPE key as 64 hex chars (or env VELA_FPE_KEY; default: random per process)
   --glossary, -g <s>    Comma-separated confidential terms to always mask
 
@@ -154,6 +156,7 @@ async function main(): Promise<void> {
       ...(typeof flags['host'] === 'string' ? { host: flags['host'] } : {}),
       ...(typeof flags['upstream'] === 'string' ? { upstream: flags['upstream'] } : {}),
       ...(typeof flags['api-key'] === 'string' ? { apiKey: flags['api-key'] } : {}),
+      ...(flags['no-passthrough'] === true ? { passthrough: false } : {}),
     });
     return;
   }

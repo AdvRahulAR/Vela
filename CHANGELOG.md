@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1
+
+- Detect Slack app-level tokens (`xapp-…`).
+- Mask PII in tool/function definitions (descriptions, `input_schema` / `parameters`) for OpenAI Chat, OpenAI Responses and Anthropic.
+- Placeholder-shaped text already in the input (e.g. a literal `[EMAIL_1]`) is reserved, so it can no longer collide with a real placeholder on restore.
+- Proxy forwards non-chat routes (`/v1/models`, …) instead of returning 404; `/v1/embeddings` input is masked. `--no-passthrough` restores strict 404s.
+- New detectors: `VOTER_ID` (context-gated) and `DRIVING_LICENCE`, masked as placeholders.
+- README: clarified that detection is heuristic; documented proxy routes.
+
 ## 0.3.0
 
 ### Security / correctness
