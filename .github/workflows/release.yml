@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # GitHub release
+      id-token: write # npm provenance / trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Use an npm with trusted publishing support
+        run: npm install -g npm@latest
+      - name: Check tag, version and changelog agree
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          test "v$VERSION" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME does not match package.json $VERSION"; exit 1; }
+          grep -q "^## $VERSION\$" CHANGELOG.md || { echo "CHANGELOG.md has no '## $VERSION' section"; exit 1; }
+          awk -v v="## $VERSION" '$0==v{f=1;next} /^## /{f=0} f' CHANGELOG.md > release-notes.md
+      - run: npm ci
+      - run: npm run build
+      - name: Publish to npm with provenance
+        run: npm publish --provenance --access public
+        env:
+          # Unused when npm trusted publishing is configured for this workflow.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Create GitHub release
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}

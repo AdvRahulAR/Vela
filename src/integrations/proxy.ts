@@ -135,11 +135,13 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
   server.listen(port, host, () => {
     const shown = host.includes(':') ? `[${host}]` : host;
     logger.info('server_started', { host, port, upstream });
+    /* eslint-disable no-console -- operator-facing startup banner, independent of enableLogging */
     console.log(`[vela] Privacy proxy active on http://${shown}:${port}`);
     console.log(`[vela] Forwarding upstream to ${upstream}`);
     if (host === '0.0.0.0' || host === '::') {
       console.warn('[vela] WARNING: listening on all interfaces — anyone who can reach this port can use it.');
     }
+    /* eslint-enable no-console */
   });
   return server;
 }

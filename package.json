@@ -24,9 +24,12 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/**/*.test.ts",
+    "test": "node scripts/run-tests.mjs",
     "benchmark": "node --import tsx tests/benchmark.ts",
-    "prepublishOnly": "npm run build"
+    "smoke": "node scripts/smoke-pack.mjs",
+    "prepublishOnly": "node scripts/guard-publish.mjs && npm run build",
+    "lint": "eslint .",
+    "coverage": "c8 --check-coverage --lines 93 --branches 78 --functions 85 --include \"src/**\" --reporter=text-summary --reporter=lcov node scripts/run-tests.mjs"
   },
   "keywords": [
     "pii",
@@ -55,11 +58,19 @@
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
+    "c8": "^11.0.0",
+    "eslint": "^9.39.5",
+    "fast-check": "^4.10.2",
     "tsup": "^8.5.1",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.71.2"
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }
