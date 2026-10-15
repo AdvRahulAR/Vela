@@ -106,38 +106,69 @@ describe('OpenAI SDK Integration', () => {
     const { createExpressMiddleware } = await import('../src/integrations/express.js');
     const middleware = createExpressMiddleware(vela);
 
-    let nextCalled = false;
-    const req = {
+    const makeReq = () => ({
       path: '/v1/chat/completions',
       body: {
         messages: [{ role: 'user', content: 'Secret project Neeti with PAN ABCDE1234F' }],
       },
       headers: {},
-    };
-
-    let responseStatus = 0;
-    let responseBody: unknown;
-
-    const res = {
-      status: (code: number) => {
-        responseStatus = code;
-        return res;
-      },
-      json: (body: unknown) => {
-        responseBody = body;
-      },
-      setHeader: () => {},
-      write: () => true,
-      end: () => {},
-    };
-
-    // If upstream fetch fails in test environment, it catches and returns 502 with structured error
-    await middleware(req, res, () => {
-      nextCalled = true;
     });
+    const makeRes = () => {
+      const out = { status: 0, json: undefined as unknown, written: '' };
+      const res = {
+        status: (code: number) => {
+          out.status = code;
+          return res;
+        },
+        json: (body: unknown) => {
+          out.json = body;
+        },
+        setHeader: () => {},
+        write: (chunk: unknown) => {
+          out.written += Buffer.from(chunk as Uint8Array).toString('utf8');
+          return true;
+        },
+        end: () => {},
+      };
+      return { res, out };
+    };
 
-    assert.equal(nextCalled, false);
-    assert.ok(responseStatus > 0);
-    assert.ok(responseBody);
+    const realFetch = globalThis.fetch;
+    try {
+      // Upstream echoes the (masked) user content back, so the client must see it restored.
+      let upstreamBody = '';
+      globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+        upstreamBody = String(init?.body ?? '');
+        const sent = JSON.parse(upstreamBody) as { messages: { content: string }[] };
+        return new Response(
+          JSON.stringify({ choices: [{ message: { role: 'assistant', content: `Echo: ${sent.messages[0]?.content}` } }] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }) as typeof fetch;
+
+      let nextCalled = false;
+      const ok = makeRes();
+      await middleware(makeReq(), ok.res, () => {
+        nextCalled = true;
+      });
+      assert.equal(nextCalled, false);
+      assert.equal(ok.out.status, 200);
+      assert.doesNotMatch(upstreamBody, /ABCDE1234F/);
+      assert.match(ok.out.written, /ABCDE1234F/);
+
+      // Upstream failure yields a structured 502 instead of calling next()
+      globalThis.fetch = (async () => {
+        throw new Error('network down');
+      }) as typeof fetch;
+      const failed = makeRes();
+      await middleware(makeReq(), failed.res, () => {
+        nextCalled = true;
+      });
+      assert.equal(nextCalled, false);
+      assert.equal(failed.out.status, 502);
+      assert.ok(failed.out.json);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });
