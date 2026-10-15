@@ -33,6 +33,7 @@ export class Vela {
         customDetectors: config.customDetectors ?? [],
         recognizers: config.recognizers ?? [],
         detectNames: config.detectNames ?? true,
+        maskCitationParties: config.maskCitationParties ?? false,
       },
     };
     this.logger = new Logger('vela-core', config.enableLogging ?? false);

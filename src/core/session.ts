@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto';
+import { STANDARD_ENTITY_TYPES } from '../config/constants.js';
 import { detectPii, nameComponents, type DetectOptions } from './detector.js';
 import type { FpeMasker } from './fpe.js';
+import { personComponents } from './names.js';
 import { Restorer, type RestoreOptions, type StreamRestorer } from './matcher.js';
 import type { DetectedEntity, EntityType, MaskResult, Replacement, SessionOptions } from '../types.js';
 
@@ -34,6 +36,9 @@ export class MaskSession {
   /** Placeholder-shaped strings already present in user input; never issued as real tokens. */
   private readonly reserved = new Set<string>();
   private readonly allEntities: DetectedEntity[] = [];
+  /** PERSON replacements with their normalised name components, for partial-mention linking. */
+  private readonly persons: Array<{ rep: Replacement; components: Set<string> }> = [];
+  private readonly linkPartialNames: boolean;
   private restorer: Restorer | null = null;
 
   constructor(
@@ -42,6 +47,7 @@ export class MaskSession {
   ) {
     this.sessionId = opts.sessionId;
     this.seed = opts.sessionId !== undefined ? `sid:${opts.sessionId}` : `rnd:${randomBytes(16).toString('hex')}`;
+    this.linkPartialNames = opts.linkPartialNames ?? true;
   }
 
   /** All replacements made so far in this session. */
@@ -63,6 +69,19 @@ export class MaskSession {
     if (this.engine.detect.detectNames === false) return;
     const ents = detectPii(text, { ...this.engine.detect, knownNames: this.knownNames, ...(prefix ? { prefix } : {}) });
     for (const n of nameComponents(ents)) this.knownNames.add(n);
+    // Register full names now so a partial mention in an earlier message links to them.
+    this.registerFullNames(ents, text);
+  }
+
+  /** Create replacements for multi-word person names first (longest first), so partial mentions link to them. */
+  private registerFullNames(entities: DetectedEntity[], text: string): void {
+    if (!this.linkPartialNames) return;
+    const full = entities
+      .filter((e) => e.type === 'PERSON')
+      .map((e) => ({ e, n: personComponents(e.value).length }))
+      .filter((x) => x.n >= 2)
+      .sort((a, b) => b.n - a.n);
+    for (const { e } of full) this.maskEntity(e, text);
   }
 
   /** Mask one string. */
@@ -75,6 +94,7 @@ export class MaskSession {
       ...(prefix ? { prefix } : {}),
     });
     for (const n of nameComponents(entities)) this.knownNames.add(n);
+    this.registerFullNames(entities, text);
 
     let out = '';
     let pos = 0;
@@ -164,15 +184,31 @@ export class MaskSession {
     return this.restorer;
   }
 
-  /** Returns the masked form, or null if this entity type is not configured for masking. */
+  /**
+   * Returns the masked form, or null if this built-in entity type is not
+   * configured for masking. Custom types (from customDetectors / recognizers)
+   * are always masked: nothing detected is passed through by accident.
+   */
   private maskEntity(e: DetectedEntity, text: string): string | null {
-    const key = `${e.type}\u0000${e.value}`;
+    const isPerson = e.type === 'PERSON';
+    const key = `${e.type}\u0000${isPerson ? e.value.toLowerCase() : e.value}`;
     const existing = this.byOriginal.get(key);
     if (existing) return existing.masked;
 
     const wantsFpe = this.engine.fpeTypes.includes(e.type);
     const wantsToken = this.engine.tokenTypes.includes(e.type);
-    if (!wantsFpe && !wantsToken) return null;
+    if (!wantsFpe && !wantsToken && STANDARD_ENTITY_TYPES.has(e.type)) return null;
+
+    // Partial mention of a known person ("Joseph" after "Joseph Mathew"): reuse that placeholder.
+    const components = isPerson ? new Set(personComponents(e.value)) : null;
+    if (components && components.size > 0 && this.linkPartialNames) {
+      const matches = this.persons.filter((p) => [...components].every((c) => p.components.has(c)));
+      if (matches.length === 1) {
+        const rep = (matches[0] as { rep: Replacement }).rep;
+        this.byOriginal.set(key, rep);
+        return rep.masked;
+      }
+    }
 
     let rep: Replacement | null = null;
     if (wantsFpe) {
@@ -186,6 +222,7 @@ export class MaskSession {
 
     this.byOriginal.set(key, rep);
     this.byMasked.set(rep.masked, rep);
+    if (components && components.size > 0) this.persons.push({ rep, components });
     return rep.masked;
   }
 

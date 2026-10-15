@@ -156,19 +156,22 @@ Point `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` (or the Anthropic SDK's `baseUR
 | Phone | Indian mobile/landline, E.164 international, North American | FF1, country code kept |
 | SSN (US) | `###-##-####` (valid ranges) or 9 digits after "SSN" | FF1, valid ranges |
 | IP address | IPv4, IPv6 | FF1 (IPv4) / placeholder (IPv6) |
-| Email | including internationalised addresses | placeholder |
-| Person name | honorifics, "my name is…", role labels (client, petitioner…), sign-offs, first-name gazetteer, later mentions of a detected name (`Mr. Sharma`, `SHARMA`) | placeholder |
+| MAC address | `00:1A:2B:3C:4D:5E`, `00-1A-…`, Cisco `001a.2b3c.4d5e` | placeholder |
+| Email | including internationalised addresses (Devanagari, CJK, accented) | placeholder |
+| Person name | honorifics, "my name is…", role labels (client, petitioner…), sign-offs, first-name gazetteer (also all-lowercase: `rahul sharma called`), later mentions of a detected name (`Mr. Sharma`, `SHARMA`, `sharma`). A partial mention (`Joseph` after `Joseph Mathew`) gets the full name's placeholder and is restored as the full name (`linkPartialNames: false` on the session turns this off) | placeholder |
 | Address | "Address: …" fields, street addresses with Indian/Western road suffixes, sectors, PIN/ZIP | placeholder |
 | Date of birth | dates after "DOB", "born on"… | placeholder |
 | PIN / ZIP code | after "PIN", "pincode", "zip" | placeholder |
 | Organisation | names ending Pvt Ltd / Ltd / LLP / Inc / LLC / GmbH… | placeholder |
-| Secrets | OpenAI, Anthropic, GitHub, AWS, Google, Stripe, Slack keys, private-key blocks, JWTs | placeholder |
+| Secrets | OpenAI, Anthropic, GitHub, AWS access + secret keys, Google, Stripe, Slack keys, private-key blocks, JWTs, `password=` / `api_key:` / `token=` values (also as JSON fields) | placeholder |
 | Custom glossary | your terms, case-insensitive | placeholder |
 
 **Precision guards:**
 - A bare 10-digit number is not treated as a phone after "order", "invoice", "txn", "ref", "id", "₹"…
-- A name found only through the gazetteer needs a surname, unless the first name can't be mistaken for an English word ("Will", "May", "Sunny" can).
+- Version strings (`v1.2.3.4`, `version 1.2.3.4`, `upgraded to 2.0.1.3`) are not IP addresses.
+- A name found only through the gazetteer needs a surname, unless the first name can't be mistaken for an English word ("Will", "May", "Sunny" can). An all-lowercase name additionally needs 4+ letters and must not be an ordinary English or Hindi word (`harsh`, `vikas`, `deepak`), unless it follows a cue such as "my name is".
 - Checksum-failing Aadhaar, card and IBAN numbers are skipped (turn off with `validateChecksums: false`).
+- Party names in **reported court citations** are left alone: `State of Kerala v. Rahul Sharma (2019) 3 SCC 123`, `… AIR 2020 Ker 55`, `… 2021 SCC OnLine Ker 99`, and references such as `in X v. Y (supra)`. A case title without a reporter citation (`Rahul Sharma v. Priya Menon`, your client's own matter) is still masked. Set `maskCitationParties: true` to mask citations too.
 
 **Name detection is heuristic, not a trained NER model.** For higher recall, plug in your own recognizer (spaCy, Presidio, compromise, wink-nlp…):
 
@@ -178,7 +181,14 @@ new Vela({
 });
 ```
 
-Court case citations are deliberately **not** masked (public record).
+**Custom detectors and types.** Anything a `customDetectors` regex or a recognizer returns is masked, whatever its `type`. A type that is not built in (`EMP_ID`, `CASE_REF`…) becomes a placeholder such as `[EMP_ID_1]` with no further configuration; list it in `fpeTypes` if you want format-preserving encryption instead. `fpeTypes` / `tokenTypes` only govern the **built-in** types, and when set they *replace* the default lists rather than extending them, so a built-in type left out of both is detected but passed through in clear text.
+
+```typescript
+new Vela({
+  customDetectors: [{ name: 'employee-id', type: 'EMP_ID', regex: /EMP-\d{5}/g }],
+});
+// "Employee EMP-12345" -> "Employee [EMP_ID_1]"
+```
 
 ---
 

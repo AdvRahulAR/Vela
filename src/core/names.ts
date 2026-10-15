@@ -36,14 +36,80 @@ alan alex albert carlos jose juan luis miguel ahmad ali hassan hussain mohammed 
 yuki kenji sakura chen wang zhang liu yang alice bob carol dave alicia elena ivan dmitri olga sergei natasha
 `;
 
-/** First names that are also common English words — only matched with a surname or a strong cue. */
+/** Common surnames; used to extend a lowercase first-name match ("rahul sharma") by one word. */
+const SURNAMES = `
+sharma verma gupta singh kumar patel reddy nair menon iyer iyengar rao khan shah mehta jain agarwal agrawal mishra pillai
+das bose banerjee chatterjee mukherjee desai joshi kulkarni naidu pandey saxena srivastava tiwari yadav chauhan malhotra
+kapoor bhatt sinha dutta ghosh sen roy mathew thomas varghese kurian fernandes dsouza d'souza pinto nambiar kurup
+warrier panicker chandran krishnan raman nathan subramanian venkatesan rajan ravi babu prasad murthy acharya hegde
+shetty kamath pai bhat gowda naik deshpande deshmukh patil jadhav pawar shinde kale more wagh bhosale chavan gaikwad
+sawant naidu chowdhury choudhary chaudhary chowdary bhattacharya bhattacharjee ganguly sarkar majumdar basu mitra dey
+paul biswas mondal ahmed ahmad hussain husain siddiqui ansari sheikh shaikh qureshi syed mirza malik kaur gill sandhu
+sidhu dhillon grewal bajwa brar sethi khanna chopra arora bhatia tandon mehra sood grover bedi anand bansal goyal
+mittal singhal garg aggarwal jindal khandelwal maheshwari soni rathod rathore solanki parmar panchal thakur thakkar
+modi trivedi dave pandya vyas raval mahajan khurana nanda bhargava tripathi dubey dwivedi upadhyay shukla chaturvedi
+dixit awasthi vajpayee pathak sahu sahoo mohanty panda nayak behera swain lenka pradhan dash samal senapati
+smith johnson williams brown jones miller davis garcia rodriguez wilson martinez anderson taylor thomas hernandez
+moore martin jackson thompson white lopez lee gonzalez harris clark lewis robinson walker perez hall young allen
+sanchez wright king scott green baker adams nelson hill ramirez campbell mitchell roberts carter phillips evans
+turner torres parker collins edwards stewart flores morris nguyen murphy rivera cook rogers morgan peterson cooper
+reed bailey bell gomez kelly howard ward cox diaz richardson wood watson brooks bennett gray james reyes cruz hughes
+price myers long foster sanders ross morales powell sullivan russell ortiz jenkins gutierrez perry butler barnes
+fisher henderson coleman simmons patterson jordan reynolds hamilton graham kim wallace west cole stone hawkins
+dunn perkins hudson spencer gardner stephens payne pierce berry matthews arnold wagner willis ray watkins olson
+carroll duncan snyder hart cunningham bradley lane andrews ruiz harper fox riley armstrong carpenter weaver greene
+lawrence elliott chavez sims austin peters kelley franklin lawson fields ryan schmidt carr vasquez castillo
+wheeler chapman oliver montgomery richards williamson johnston banks meyer bishop mccoy howell alvarez morrison
+hansen fernandez garza harvey little burton stanley nguyen george jacobs reid kim fuller lynch dean gilbert garrett
+romero welch larson frazier burke hanson day mendoza moreno bowman medina fowler brewer hoffman carlson silva
+pearson holland douglas fleming jensen vargas byrd davidson hopkins may terry herrera wade soto walters curtis
+neal caldwell lowe jennings barnett graves jimenez horton shelton barrett obrien castro sutton gregory mckinney
+lucas miles craig rodriquez chambers holt lambert fletcher watts bates hale rhodes pena beck newman haynes mcdaniel
+mendez bush vaughn parks dawson santiago norris hardy love steele curry powers schultz barker guzman page munoz ball
+keller chandler weber leonard walsh lyons ramsey wolfe schneider mullins benson sharp bowen daniel barber cummings
+hines baldwin griffith valdez hubbard salazar reeves warner stevenson burgess santos tate cross garner mann mack
+moss thornton dennis mcgee farmer delgado aguilar vega glover manning cohen harmon rodgers robbins newton todd
+blair higgins ingram reese cannon strickland townsend potter goodwin walton rowe hampton ortega patton swanson
+joseph francis goodman maldonado yates becker erickson hodges rios conner adkins webster norman malone hammond
+flowers cobb moody quinn blake maxwell pope floyd osborne paul mccarthy guerrero lindsey estrada sandoval gibbs
+tyler gross fitzgerald stokes doyle sherman saunders wise colon gill alvarado greer padilla simon waters nunez
+ballard schwartz mcbride houston christensen klein pratt briggs parsons mclaughlin zimmerman french buchanan moran
+copeland roy pittman brady mccormick holloway brock poole frank logan owen bass marsh drake wong jefferson park
+morton abbott sparks patrick norton huff clayton massey lloyd figueroa carson bowers roberson barton tran lamb
+harrington casey boone cortez clarke mathis singleton wilkins cain bryan underwood hogan mckenzie collier luna
+phelps mcguire allison bridges wilkerson nash summers atkins wang li zhang liu chen yang huang zhao wu zhou xu sun ma
+zhu hu guo he gao lin luo zheng tanaka suzuki sato takahashi watanabe ito yamamoto nakamura kobayashi kato
+`;
+
+/**
+ * First names and surnames that are also ordinary English / Hinglish words —
+ * only matched with a surname, a strong cue, or capitalisation; never matched
+ * as a bare lowercase word.
+ */
 const AMBIGUOUS = new Set(
   `will grace mark may rose hope joy faith bill amber summer chase pat sunny art rich dawn eve holly iris ivy june lily
 ruby violet april august frank gene guy jean ray rob sandy sky star cliff drew earl glen lee miles ward wade penny king
-prince major hunter mason carter cooper taylor ram`.split(/\s+/).filter(Boolean),
+prince major hunter mason carter cooper taylor ram harsh christian
+brown white young green hill wood stone bell price long short little small day knight bishop page fox wolf bird field
+ford marsh moore wright cook reed cox jain shah khan das bose more pai dash love cross mann moss bush parks powers
+sharp daniel wise simon waters french park sun ma he lin cain nash`.split(/\s+/).filter(Boolean),
+);
+
+/**
+ * Names that are ordinary words only when written in lowercase (Hinglish nouns
+ * such as "vikas" = development, "deepak" = lamp; English words such as
+ * "carol", "heather"). Capitalised, they are still treated as names.
+ */
+const LOWERCASE_AMBIGUOUS = new Set(
+  `carol heather jordan austin madison virginia victoria wang yang ming zara sakura kamal kiran vikas vijay anand akash
+sagar bharat asha prakash uday suman deepak amar nitya diya pari tara alice prem shanti mohan gopal shiv krishna ganesh
+lakshmi priya jaya vidya usha uma meena sona pooja puja kavita geeta gita sudha madhu rani raja kumar kumari`
+    .split(/\s+/)
+    .filter(Boolean),
 );
 
 const FIRST = new Set(FIRST_NAMES.split(/\s+/).filter(Boolean));
+const SURNAME = new Set(SURNAMES.split(/\s+/).filter(Boolean));
 
 /** Words that can never be (part of) a detected name; trimmed from candidate edges. */
 export const NAME_STOPWORDS = new Set(
@@ -72,6 +138,29 @@ export function isKnownFirstName(word: string): boolean {
 
 export function isAmbiguousName(word: string): boolean {
   return AMBIGUOUS.has(word.toLowerCase());
+}
+
+/** True when a bare lowercase `word` is too likely to be an ordinary word to be treated as a name. */
+export function isLowercaseAmbiguous(word: string): boolean {
+  const w = word.toLowerCase();
+  return AMBIGUOUS.has(w) || LOWERCASE_AMBIGUOUS.has(w);
+}
+
+export function isKnownSurname(word: string): boolean {
+  return SURNAME.has(word.toLowerCase());
+}
+
+/**
+ * Normalised name components of a person-name span: words of 3+ letters that
+ * are not stopwords, lower-cased, with trailing "." / "'s" stripped.
+ */
+export function personComponents(value: string): string[] {
+  const out: string[] = [];
+  for (const raw of value.split(/[\s,]+/)) {
+    const w = raw.replace(/\.$/, '').replace(/['’]s$/i, '');
+    if (w.length >= 3 && !isNameStopword(w) && /^[A-Za-z][A-Za-z'’-]+$/.test(w)) out.push(w.toLowerCase());
+  }
+  return out;
 }
 
 export function isNameStopword(word: string): boolean {

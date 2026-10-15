@@ -563,3 +563,92 @@ describe('0.3.1 gap fixes', () => {
     }
   });
 });
+
+describe('0.3.2 gap fixes', () => {
+  const types = (t: string) => detectPii(t).map((e) => `${e.type}:${e.value}`);
+  const persons = (t: string) => detectPii(t).filter((e) => e.type === 'PERSON').map((e) => e.value);
+
+  it('custom entity types are always masked (never passed through)', () => {
+    const v = new Vela({
+      fpeKey: KEY,
+      customDetectors: [{ name: 'emp', type: 'EMP_ID', regex: /EMP-\d{5}/g }],
+      recognizers: [(t) => (t.includes('REF-9') ? [{ type: 'ACCOUNT_REF', start: t.indexOf('REF-9'), end: t.indexOf('REF-9') + 5 }] : [])],
+    });
+    const s = v.createSession();
+    const masked = s.mask('Employee EMP-12345 with REF-9 pending');
+    assert.equal(masked, 'Employee [EMP_ID_1] with [ACCOUNT_REF_1] pending');
+    assert.equal(s.unmask(masked).text, 'Employee EMP-12345 with REF-9 pending');
+    // Built-in types keep their opt-out semantics.
+    const off = new Vela({ fpeKey: KEY, tokenTypes: [] });
+    assert.equal(off.mask('mail bob@example.com').text, 'mail bob@example.com');
+  });
+
+  it('detects all-lowercase names without masking ordinary prose', () => {
+    assert.deepEqual(persons('rahul sharma called. arjun told deepa to pay.'), ['rahul sharma', 'arjun', 'deepa']);
+    assert.deepEqual(persons('the harsh winter was long; christian values; a brown bag'), []);
+    assert.deepEqual(persons('const john = 1; emma.ts'), []);
+    assert.deepEqual(persons('rahul said hello'), ['rahul']);
+    assert.deepEqual(persons('amit paid'), ['amit']);
+    assert.deepEqual(persons('ram paid'), []);
+    assert.deepEqual(persons('my name is ram'), ['ram']);
+    assert.deepEqual(persons('Rahul Sharma signed. later sharma paid.'), ['Rahul Sharma', 'sharma']);
+    assert.deepEqual(persons('Christian Brown left. christian values in a brown bag.'), ['Christian Brown']);
+    assert.deepEqual(persons('Deepak called. Kiran left.'), ['Deepak', 'Kiran']);
+  });
+
+  it('links partial mentions of a person to the full name placeholder', () => {
+    const rt = (s: string) => {
+      const r = vela.mask(s);
+      return [r.text, vela.unmask(r.text, r).text];
+    };
+    assert.deepEqual(rt('Joseph Mathew signed. Joseph paid.'), ['[PERSON_1] signed. [PERSON_1] paid.', 'Joseph Mathew signed. Joseph Mathew paid.']);
+    assert.deepEqual(rt('Joseph paid. Joseph Mathew signed.'), ['[PERSON_1] paid. [PERSON_1] signed.', 'Joseph Mathew paid. Joseph Mathew signed.']);
+    assert.equal(rt('Rahul Sharma and Rahul Verma met. Rahul left.')[0], '[PERSON_1] and [PERSON_2] met. [PERSON_3] left.');
+    assert.equal(rt('Mr. Sharma, Rahul Sharma')[0], 'Mr. [PERSON_1], [PERSON_1]');
+    assert.equal(rt('SHARMA and Sharma and sharma: Rahul Sharma')[0], '[PERSON_1] and [PERSON_1] and [PERSON_1]: [PERSON_1]');
+    assert.equal(vela.createSession({ linkPartialNames: false }).mask('Joseph Mathew signed. Joseph paid.'), '[PERSON_1] signed. [PERSON_2] paid.');
+
+    // Full name in a later message links the earlier short mention via the learn() pass.
+    const { payload, session } = maskOpenAiRequest(vela, {
+      model: 'm',
+      messages: [
+        { role: 'user', content: 'Joseph paid' },
+        { role: 'user', content: 'Joseph Mathew signed' },
+      ],
+    });
+    const texts = payload.messages.map((m) => m.content as string);
+    assert.deepEqual(texts, ['[PERSON_1] paid', '[PERSON_1] signed']);
+    assert.equal(session.unmask(texts[0] as string).text, 'Joseph Mathew paid');
+  });
+
+  it('detects emails with combining marks (Devanagari)', () => {
+    const got = types('राहुल@उदाहरण.भारत 用户@例子.广告 josé@exämple.com');
+    assert.deepEqual(got, ['EMAIL:राहुल@उदाहरण.भारत', 'EMAIL:用户@例子.广告', 'EMAIL:josé@exämple.com']);
+  });
+
+  it('does not treat version strings as IP addresses', () => {
+    for (const t of ['version 1.2.3.4', 'v1.2.3.4', 'upgraded to 2.0.1.3', 'release: 3.1.4.1']) assert.deepEqual(types(t), [], t);
+    for (const t of ['host 10.0.0.1', 'ip: 8.8.8.8', 'server at 192.168.1.1']) assert.equal(types(t).length, 1, t);
+  });
+
+  it('leaves party names in reported court citations alone', () => {
+    assert.deepEqual(types('State of Kerala v. Rahul Sharma (2019) 3 SCC 123'), []);
+    assert.deepEqual(persons('Rahul Sharma v. Priya Menon'), ['Rahul Sharma', 'Priya Menon']);
+    assert.deepEqual(types('In Rahul Sharma v. Union of India (supra)'), []);
+    assert.deepEqual(persons('Client Rahul Sharma; see Rahul Sharma v. State AIR 2020 Ker 55. Sharma paid.'), ['Rahul Sharma', 'Sharma']);
+    assert.deepEqual(types('Rahul Sharma v. Anr, 2021 SCC OnLine Ker 99; call 9876543210'), ['PHONE:9876543210']);
+    const r = new Vela({ fpeKey: KEY, maskCitationParties: true }).mask('State of Kerala v. Rahul Sharma (2019) 3 SCC 123');
+    assert.equal(r.text, 'State of Kerala v. [PERSON_1] (2019) 3 SCC 123');
+  });
+
+  it('detects key=value credentials, AWS secret keys and MAC addresses', () => {
+    assert.deepEqual(types('password=hunter2'), ['SECRET_KEY:hunter2']);
+    assert.deepEqual(types('aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'), ['SECRET_KEY:wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY']);
+    assert.deepEqual(types('00:1A:2B:3C:4D:5E and 001a.2b3c.4d5e'), ['MAC_ADDRESS:00:1A:2B:3C:4D:5E', 'MAC_ADDRESS:001a.2b3c.4d5e']);
+    assert.deepEqual(types('the token expired'), []);
+    assert.equal(vela.createSession().maskJsonString('{"password":"hunter2","user":"bob"}'), '{"password":"[SECRET_KEY_1]","user":"bob"}');
+    const r = vela.mask('MAC 00:1A:2B:3C:4D:5E');
+    assert.equal(r.text, 'MAC [MAC_ADDRESS_1]');
+    assert.equal(vela.unmask(r.text, r).text, 'MAC 00:1A:2B:3C:4D:5E');
+  });
+});

@@ -8,6 +8,8 @@ import {
   STRONG_NAME_CONTEXT,
   isAmbiguousName,
   isKnownFirstName,
+  isKnownSurname,
+  isLowercaseAmbiguous,
   isNameStopword,
 } from './names.js';
 
@@ -69,6 +71,29 @@ const BUILTIN_PATTERNS: PatternDef[] = [
     confidence: 1,
   },
   { type: 'JWT', regex: /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, confidence: 0.99 },
+  {
+    // key=value / key: value credentials ("password=hunter2", "api_key: …", JSON "password" fields via the key prefix)
+    type: 'SECRET_KEY',
+    regex:
+      /\b(?:password|passwd|pwd|passphrase|secret|api[_-]?key|apikey|access[_-]?token|auth[_-]?token|bearer[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|aws[_-]?secret[_-]?access[_-]?key|secret[_-]?access[_-]?key|token)\s*[:=]\s*["']?([^\s"',;]{6,})/gi,
+    confidence: 0.95,
+    group: 1,
+  },
+  {
+    // AWS secret access key: 40 base64 chars after an "aws" / "secret" cue
+    type: 'SECRET_KEY',
+    regex: /(?<![A-Za-z0-9/+=])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])/g,
+    confidence: 0.95,
+    context: { require: /\b(?:aws|secret)[^\n]{0,50}$/i, window: 60 },
+  },
+
+  // ── Network hardware ────────────────────────────────────────────────────
+  {
+    type: 'MAC_ADDRESS',
+    regex:
+      /(?<![0-9A-Za-z:.-])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![0-9A-Za-z:.-])|(?<![0-9A-Za-z.])(?:[0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}(?![0-9A-Za-z.])/g,
+    confidence: 0.9,
+  },
 
   // ── Indian identifiers ──────────────────────────────────────────────────
   {
@@ -143,7 +168,9 @@ const BUILTIN_PATTERNS: PatternDef[] = [
   // ── Contact ─────────────────────────────────────────────────────────────
   {
     type: 'EMAIL',
-    regex: /(?<![\p{L}\p{N}._%+-])[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}(?![\p{L}\p{N}])/gu,
+    // \p{M}: combining marks (Devanagari vowel signs, etc.) are not letters.
+    regex:
+      /(?<![\p{L}\p{M}\p{N}._%+-])[\p{L}\p{M}\p{N}._%+-]+@[\p{L}\p{M}\p{N}-]+(?:\.[\p{L}\p{M}\p{N}-]+)*\.[\p{L}\p{M}]{2,}(?![\p{L}\p{M}\p{N}])/gu,
     confidence: 0.98,
   },
   {
@@ -210,6 +237,11 @@ const BUILTIN_PATTERNS: PatternDef[] = [
     regex:
       /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?!\d|\.\d)/g,
     confidence: 0.85,
+    // Version strings ("v1.2.3.4", "version 1.2.3.4", "upgraded to 2.0.1.3") are not addresses.
+    context: {
+      reject: /(?:\bv(?:er(?:sion)?)?\.?|\brelease|\bbuild|\bfirmware|\bupgraded?\s+to|\bupdated?\s+to)\s*[:=]?\s*$|[a-z]v$/i,
+      window: 16,
+    },
   },
   {
     type: 'IP_ADDRESS',
@@ -312,12 +344,87 @@ function detectNames(text: string): DetectedEntity[] {
   return out;
 }
 
+const LOWER_WORD = /(?<![\w@./_-])[a-z][a-z'’-]+(?![\w@./_-])/g;
+
+/**
+ * All-lowercase names ("rahul sharma called. arjun told deepa"): a gazetteer
+ * first name of 4+ letters that is not an ordinary word, or any gazetteer
+ * first name after a strong cue, optionally extended by one known surname.
+ */
+function detectLowercaseNames(text: string): DetectedEntity[] {
+  const out: DetectedEntity[] = [];
+  LOWER_WORD.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = LOWER_WORD.exec(text)) !== null) {
+    const w = m[0];
+    if (!isKnownFirstName(w) || isNameStopword(w)) continue;
+    const start = m.index;
+    const pre = text.slice(Math.max(0, start - 40), start);
+    const strong = STRONG_NAME_CONTEXT.test(pre);
+    if (!strong && (w.length < 4 || isLowercaseAmbiguous(w))) continue;
+    let end = start + w.length;
+    // Code identifiers: `const john = 1`, `emma(`.
+    if (/^\s*[=(]/.test(text.slice(end, end + 3))) continue;
+    const next = /^ ([a-z][a-z'’-]+)(?![\w@./_-])/.exec(text.slice(end, end + 40));
+    if (next && isKnownSurname(next[1] as string) && !isNameStopword(next[1] as string)) {
+      end += 1 + (next[1] as string).length;
+      LOWER_WORD.lastIndex = end;
+    }
+    out.push({ type: 'PERSON', start, end, value: text.slice(start, end), confidence: strong ? 0.9 : 0.75 });
+  }
+  return out;
+}
+
+// ── Court case citations ("State of Kerala v. Rahul Sharma (2019) 3 SCC 123") ──
+const PWORD = `[A-Z][\\w.&'()-]*`;
+const PCONN = `(?:of|the|and|&|for|through|thr\\.|by|its|Anr\\.?|Ors\\.?|etc\\.?)`;
+const PARTY = `${PWORD}(?:[ ]+(?:${PWORD}|${PCONN})){0,11}`;
+const REPORTER =
+  `(?:\\(\\d{4}\\)[ ]*\\d{1,3}[ ]+[A-Z][A-Za-z.]*(?:[ ][A-Z][A-Za-z.]*)?[ ]*\\d{1,5}` +
+  `|\\[\\d{4}\\][ ]*\\d{0,3}[ ]*[A-Z][A-Za-z.]+[ ]*\\d{1,5}` +
+  `|AIR[ ]+\\d{4}[ ]+[A-Z][A-Za-z.]*[ ]+\\d{1,5}` +
+  `|\\d{4}[ ]+SCC[ ]+OnLine[ ]+[A-Za-z]+[ ]+\\d{1,6}` +
+  `|\\d{4}[ ]*\\(\\d{1,3}\\)[ ]*[A-Z][A-Za-z.]+[ ]*\\d{1,5})`;
+/** Case title followed by a reporter citation. */
+const CITATION_ZONE = new RegExp(`(?<![\\w@])${PARTY}[ ]+(?:v\\.?|vs\\.?|versus)[ ]+${PARTY}[ ]*,?[ ]*${REPORTER}`, 'g');
+/** Bare "X v. Y" only when anchored as a reference: after in/see/per/vide…, before (supra), (YYYY) or ", YYYY". */
+const BARE_VS_ANCHORED = new RegExp(
+  `(?<=\\b(?:in|see|per|vide|following|cf\\.)[ ]+)${PARTY}[ ]+(?:v\\.?|vs\\.?)[ ]+${PARTY}(?=[ ]*(?:\\(supra\\)|\\(\\d{4}\\)|,[ ]*\\d{4}\\b))`,
+  'gi',
+);
+
+function citationZones(text: string): Array<[number, number]> {
+  if (!/\b(?:v|vs|versus)\.?[ ]/i.test(text)) return [];
+  const zones: Array<[number, number]> = [];
+  for (const re of [CITATION_ZONE, BARE_VS_ANCHORED]) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      if (m[0].length === 0) {
+        re.lastIndex++;
+        continue;
+      }
+      zones.push([m.index, m.index + m[0].length]);
+    }
+  }
+  return zones;
+}
+
+const CITATION_EXEMPT_TYPES: ReadonlySet<EntityType> = new Set(['PERSON', 'ORG']);
+
+function outsideZones(e: DetectedEntity, zones: Array<[number, number]>): boolean {
+  if (!CITATION_EXEMPT_TYPES.has(e.type)) return true;
+  return !zones.some(([s, en]) => e.start < en && e.end > s);
+}
+
 export interface DetectOptions {
   glossary?: string[];
   validateChecksums?: boolean;
   customDetectors?: CustomDetector[];
   recognizers?: EntityRecognizer[];
   detectNames?: boolean;
+  /** Mask party names inside reported court citations. Default: false (citations are public record). */
+  maskCitationParties?: boolean;
   /** Name components already known from earlier text in the session; re-mentions are masked. */
   knownNames?: Iterable<string>;
   /**
@@ -440,11 +547,19 @@ export function detectPii(text: string, options?: DetectOptions | string[]): Det
     }
   }
 
-  if (opts.detectNames !== false) found.push(...detectNames(full));
+  if (opts.detectNames !== false) {
+    found.push(...detectNames(full));
+    found.push(...detectLowercaseNames(full));
+  }
 
   let selected = resolveOverlaps(found);
 
-  // Re-mentions of known name components ("Rahul Sharma … Mr. Sharma … SHARMA").
+  // Party names inside reported court citations are public record: drop them
+  // before they can seed re-mentions elsewhere in the text.
+  const zones = opts.maskCitationParties ? [] : citationZones(full);
+  if (zones.length) selected = selected.filter((e) => outsideZones(e, zones));
+
+  // Re-mentions of known name components ("Rahul Sharma … Mr. Sharma … SHARMA … sharma").
   if (opts.detectNames !== false) {
     const components = new Set<string>(opts.knownNames ?? []);
     for (const e of selected) {
@@ -458,6 +573,8 @@ export function detectPii(text: string, options?: DetectOptions | string[]): Det
       for (const c of components) {
         variants.add(c[0]!.toUpperCase() + c.slice(1).toLowerCase());
         variants.add(c.toUpperCase());
+        // Lowercase re-mentions only for words that cannot be ordinary prose ("will", "brown").
+        if (c.length >= 4 && !isLowercaseAmbiguous(c)) variants.add(c.toLowerCase());
       }
       const re = new RegExp(`(?<![\\w@])(?:${[...variants].map(escapeRe).join('|')})(?![\\w@])`, 'g');
       const extra: DetectedEntity[] = [];
@@ -465,9 +582,8 @@ export function detectPii(text: string, options?: DetectOptions | string[]): Det
       while ((m = re.exec(full)) !== null) {
         const s = m.index;
         const e = s + m[0].length;
-        if (!selected.some((x) => s < x.end && e > x.start)) {
-          extra.push({ type: 'PERSON', start: s, end: e, value: m[0], confidence: 0.8 });
-        }
+        const ent: DetectedEntity = { type: 'PERSON', start: s, end: e, value: m[0], confidence: 0.8 };
+        if (!selected.some((x) => s < x.end && e > x.start) && outsideZones(ent, zones)) extra.push(ent);
       }
       if (extra.length) selected = [...selected, ...extra].sort((a, b) => a.start - b.start);
     }

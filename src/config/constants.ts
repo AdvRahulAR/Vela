@@ -1,4 +1,4 @@
-import type { EntityType } from '../types.js';
+import type { EntityType, StandardEntityType } from '../types.js';
 
 export const DEFAULT_FPE_TYPES: EntityType[] = [
   'AADHAAR',
@@ -27,10 +27,18 @@ export const DEFAULT_TOKEN_TYPES: EntityType[] = [
   'ORG',
   'SECRET_KEY',
   'JWT',
+  'MAC_ADDRESS',
   'CUSTOM',
 ];
 
-export const PACKAGE_VERSION = '0.3.1';
+/** Every built-in entity type. Any other type comes from a custom detector or recognizer. */
+export const STANDARD_ENTITY_TYPES: ReadonlySet<EntityType> = new Set<StandardEntityType>([
+  'AADHAAR', 'PAN', 'GSTIN', 'CREDIT_CARD', 'EMAIL', 'PHONE', 'SSN', 'IBAN', 'IP_ADDRESS', 'BANK_ACCOUNT',
+  'IFSC', 'PASSPORT', 'VOTER_ID', 'DRIVING_LICENCE', 'UPI_ID', 'DATE_OF_BIRTH', 'PIN_CODE', 'ADDRESS',
+  'SECRET_KEY', 'JWT', 'MAC_ADDRESS', 'PERSON', 'LOCATION', 'ORG', 'CUSTOM',
+]);
+
+export const PACKAGE_VERSION = '0.3.2';
 
 export const DIGITS = '0123456789';
 export const UPPER_ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.2
+
+Fixes for the gaps found by an external test of 0.3.1.
+
+- **Fix:** entities with a custom type (from `customDetectors` or `recognizers`, e.g. `EMP_ID`) were passed through unmasked unless the type was also listed in `tokenTypes`. Any non-built-in type is now always masked (placeholder, or FPE if listed in `fpeTypes`). `fpeTypes` / `tokenTypes` keep their opt-out semantics for built-in types and are now documented as replacing the defaults.
+- All-lowercase names are detected (`rahul sharma called. arjun told deepa…`), including lowercase re-mentions of a known name (`sharma`). Gazetteer names that are ordinary English/Hindi words in lowercase (`harsh`, `christian`, `vikas`, `deepak`…) are only matched when capitalised or after a cue.
+- A partial mention of a person (`Joseph`, `Mr. Sharma`, `SHARMA`) now gets the same placeholder as the full name seen in the session and is restored as the full name. Case variants share one placeholder. Ambiguous short mentions (two known people called Rahul) still get their own placeholder. Opt out per session with `linkPartialNames: false`. Placeholder numbers for people are no longer guaranteed to follow text order.
+- Party names inside reported court citations (`… v. … (2019) 3 SCC 123`, `AIR 2020 Ker 55`, `2021 SCC OnLine Ker 99`, `in X v. Y (supra)`) are left intact, as the README promised. `maskCitationParties: true` masks them.
+- Emails containing combining marks (Devanagari and similar scripts, e.g. `राहुल@उदाहरण.भारत`) are detected.
+- Version strings (`v1.2.3.4`, `version 1.2.3.4`, `upgraded to 2.0.1.3`) are no longer masked as IP addresses.
+- New detections: `password=` / `api_key:` / `token=` style credentials (also in JSON fields), AWS secret access keys, and `MAC_ADDRESS` (colon, dash and Cisco dot formats; placeholder).
+
 ## 0.3.1
 
 - Detect Slack app-level tokens (`xapp-…`).

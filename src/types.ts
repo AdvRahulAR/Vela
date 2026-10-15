@@ -23,6 +23,7 @@ export type StandardEntityType =
   | 'ADDRESS'
   | 'SECRET_KEY'
   | 'JWT'
+  | 'MAC_ADDRESS'
   | 'PERSON'
   | 'LOCATION'
   | 'ORG'
@@ -41,6 +42,11 @@ export interface DetectedEntity {
 
 export interface CustomDetector {
   name: string;
+  /**
+   * Entity type of the matches. A type that is not one of the built-in
+   * `StandardEntityType`s is always masked as a placeholder (`[MY_TYPE_1]`),
+   * or with FPE if listed in `fpeTypes`; it never needs to be added to `tokenTypes`.
+   */
   type: EntityType;
   regex: RegExp;
   confidence?: number;
@@ -63,9 +69,17 @@ export interface VelaConfig {
   fpeTweak?: Uint8Array;
   /** Glossary of confidential terms/phrases to mask. */
   glossary?: string[];
-  /** Entity types to mask using Format-Preserving Encryption. */
+  /**
+   * Built-in entity types to mask using Format-Preserving Encryption.
+   * Replaces `DEFAULT_FPE_TYPES` when set (it is not merged with the default list).
+   */
   fpeTypes?: EntityType[];
-  /** Entity types to mask using reversible semantic tokens. */
+  /**
+   * Built-in entity types to mask using reversible placeholders such as `[EMAIL_1]`.
+   * Replaces `DEFAULT_TOKEN_TYPES` when set. A built-in type listed in neither
+   * `fpeTypes` nor `tokenTypes` is detected but left in clear text; custom types
+   * (from `customDetectors` / `recognizers`) are always masked regardless.
+   */
   tokenTypes?: EntityType[];
   /** Whether to enforce cryptographic checksum validation (e.g. Verhoeff, Luhn). Default: true. */
   validateChecksums?: boolean;
@@ -78,6 +92,13 @@ export interface VelaConfig {
    * first-name gazetteer). Default: true.
    */
   detectNames?: boolean;
+  /**
+   * Mask party names inside court case citations ("State of Kerala v. Rahul
+   * Sharma (2019) 3 SCC 123"). Default: false — reported citations are public
+   * record and are left intact. Case titles without a reporter citation are
+   * always masked.
+   */
+  maskCitationParties?: boolean;
   /** Enable structured JSON logging. Default: false. */
   enableLogging?: boolean;
 }
@@ -91,6 +112,13 @@ export interface SessionOptions {
    * across sessions.
    */
   sessionId?: string;
+  /**
+   * Give a partial mention of a person ("Joseph", "Mr. Sharma", "SHARMA") the
+   * same placeholder as the full name seen in the session ("Joseph Mathew",
+   * "Rahul Sharma") when it matches exactly one known name. The partial mention
+   * is restored as the full name. Default: true.
+   */
+  linkPartialNames?: boolean;
 }
 
 export interface Replacement {
