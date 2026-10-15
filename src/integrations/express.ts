@@ -1,3 +1,4 @@
+import { VelaError } from '../core/errors.js';
 import type { Vela } from '../core/vela.js';
 import { DEFAULT_ANTHROPIC_URL, DEFAULT_UPSTREAM_URL } from '../config/constants.js';
 import { detectApiFormat } from './formats.js';
@@ -90,6 +91,10 @@ export function createExpressMiddleware(
     } catch (err) {
       if (res.headersSent) {
         res.end();
+        return;
+      }
+      if (err instanceof VelaError) {
+        res.status(err.status).json({ error: { message: err.message, type: 'vela_error' } });
         return;
       }
       const message = err instanceof Error ? err.message : 'Unknown gateway error';

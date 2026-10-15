@@ -1,0 +1,17 @@
+{"text":"Rahul Sharma lives in Pune.","entities":[{"type":"PERSON","value":"Rahul Sharma"}],"tags":["name"]}
+{"text":"Dear Mr. Sharma, please meet Priya.","entities":[{"type":"PERSON","value":"Sharma"},{"type":"PERSON","value":"Priya"}],"tags":["name","honorific"]}
+{"text":"Regards,\nAnita Desai","entities":[{"type":"PERSON","value":"Anita Desai"}],"tags":["name","signoff"]}
+{"text":"rahul sharma called. arjun told deepa to pay.","entities":[{"type":"PERSON","value":"rahul sharma"},{"type":"PERSON","value":"arjun"},{"type":"PERSON","value":"deepa"}],"tags":["name","lowercase"]}
+{"text":"Joseph Mathew signed. Joseph paid.","entities":[{"type":"PERSON","value":"Joseph Mathew"},{"type":"PERSON","value":"Joseph"}],"tags":["name","remention"]}
+{"text":"My name is Ram.","entities":[{"type":"PERSON","value":"Ram"}],"tags":["name","cue"]}
+{"text":"Petitioner: Kavya Iyer","entities":[{"type":"PERSON","value":"Kavya Iyer"}],"tags":["name","legal"]}
+{"text":"Contact Ms. Nguyen Thi Lan","entities":[{"type":"PERSON","value":"Nguyen Thi Lan"}],"tags":["name","honorific"]}
+{"text":"Mohammed Arif Siddiqui joined","entities":[{"type":"PERSON","value":"Mohammed Arif Siddiqui"}],"tags":["name"]}
+{"text":"per Lakshmi Narayanan","entities":[{"type":"PERSON","value":"Lakshmi Narayanan"}],"tags":["name"]}
+{"text":"met Oluwaseun Adeyemi","entities":[{"type":"PERSON","value":"Oluwaseun Adeyemi"}],"tags":["name","hard"]}
+{"text":"cc: Sreekumar Pillai","entities":[{"type":"PERSON","value":"Sreekumar Pillai"}],"tags":["name","hard"]}
+{"text":"SELVAM called","entities":[{"type":"PERSON","value":"SELVAM"}],"tags":["name","hard","upper"]}
+{"text":"ராகுல் phoned","entities":[{"type":"PERSON","value":"ராகுல்"}],"tags":["name","hard","indic"]}
+{"text":"राहुल शर्मा ने फोन किया","entities":[{"type":"PERSON","value":"राहुल शर्मा"}],"tags":["name","hard","indic"]}
+{"text":"Thiruvenkatam will attend","entities":[{"type":"PERSON","value":"Thiruvenkatam"}],"tags":["name","hard"]}
+{"text":"I met deepa. later arjun came","entities":[{"type":"PERSON","value":"deepa"},{"type":"PERSON","value":"arjun"}],"tags":["name","lowercase"]}

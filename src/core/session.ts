@@ -3,6 +3,7 @@ import { STANDARD_ENTITY_TYPES } from '../config/constants.js';
 import { detectPii, nameComponents, type DetectOptions } from './detector.js';
 import type { FpeMasker } from './fpe.js';
 import { personComponents } from './names.js';
+import { VelaInputTooLargeError } from './errors.js';
 import { Restorer, type RestoreOptions, type StreamRestorer } from './matcher.js';
 import type { DetectedEntity, EntityType, MaskResult, Replacement, SessionOptions } from '../types.js';
 
@@ -15,6 +16,8 @@ export interface SessionEngine {
   fpeTypes: EntityType[];
   tokenTypes: EntityType[];
   detect: Omit<DetectOptions, 'knownNames' | 'prefix'>;
+  /** Largest single text accepted by mask()/learn(); larger input throws VelaInputTooLargeError. */
+  maxInputChars: number;
 }
 
 function humanizeKey(key: string): string {
@@ -65,6 +68,7 @@ export class MaskSession {
    */
   learn(text: string, prefix?: string): void {
     if (!text) return;
+    this.checkSize(text);
     this.reserveLiteralTokens(text);
     if (this.engine.detect.detectNames === false) return;
     const ents = detectPii(text, { ...this.engine.detect, knownNames: this.knownNames, ...(prefix ? { prefix } : {}) });
@@ -87,6 +91,7 @@ export class MaskSession {
   /** Mask one string. */
   mask(text: string, prefix?: string): string {
     if (!text) return text;
+    this.checkSize(text);
     this.reserveLiteralTokens(text);
     const entities = detectPii(text, {
       ...this.engine.detect,
@@ -119,16 +124,33 @@ export class MaskSession {
 
   /** Deep-mask every string leaf of a JSON-like value; object keys provide context cues. */
   maskValue<T>(value: T, key?: string): T {
+    // Reserve placeholder-shaped literals from every leaf first, so a token issued
+    // for an earlier field can never equal a literal in a later field.
+    this.reserveDeep(value);
+    return this.maskValueInner(value, key);
+  }
+
+  private maskValueInner<T>(value: T, key?: string): T {
     if (typeof value === 'string') {
       return this.mask(value, key ? `${humanizeKey(key)}: ` : undefined) as unknown as T;
     }
-    if (Array.isArray(value)) return value.map((v) => this.maskValue(v, key)) as unknown as T;
+    if (Array.isArray(value)) return value.map((v) => this.maskValueInner(v, key)) as unknown as T;
     if (value && typeof value === 'object') {
       const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(value)) out[k] = this.maskValue(v, k);
+      for (const [k, v] of Object.entries(value)) out[k] = this.maskValueInner(v, k);
       return out as T;
     }
     return value;
+  }
+
+  private checkSize(text: string): void {
+    if (text.length > this.engine.maxInputChars) throw new VelaInputTooLargeError(text.length, this.engine.maxInputChars);
+  }
+
+  private reserveDeep(value: unknown): void {
+    if (typeof value === 'string') this.reserveLiteralTokens(value);
+    else if (Array.isArray(value)) value.forEach((v) => this.reserveDeep(v));
+    else if (value && typeof value === 'object') Object.values(value).forEach((v) => this.reserveDeep(v));
   }
 
   /** Learning pass over a JSON-like value (see learn()). */

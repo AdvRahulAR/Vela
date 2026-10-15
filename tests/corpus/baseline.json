@@ -1,0 +1,28 @@
+{
+  "recall": {
+    "AADHAAR": 1,
+    "ADDRESS": 0.7143,
+    "BANK_ACCOUNT": 1,
+    "CREDIT_CARD": 1,
+    "DATE_OF_BIRTH": 1,
+    "DRIVING_LICENCE": 1,
+    "EMAIL": 1,
+    "GSTIN": 1,
+    "IBAN": 1,
+    "IFSC": 1,
+    "IP_ADDRESS": 1,
+    "JWT": 1,
+    "MAC_ADDRESS": 1,
+    "ORG": 1,
+    "PAN": 1,
+    "PASSPORT": 1,
+    "PERSON": 0.7692,
+    "PHONE": 1,
+    "PIN_CODE": 1,
+    "SECRET_KEY": 1,
+    "SSN": 1,
+    "UPI_ID": 1,
+    "VOTER_ID": 1
+  },
+  "falsePositives": 1
+}

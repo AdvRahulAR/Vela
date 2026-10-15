@@ -1,5 +1,6 @@
 // Core
 export { Vela } from './core/vela.js';
+export { VelaError, VelaInputTooLargeError } from './core/errors.js';
 export { MaskSession } from './core/session.js';
 export { FF1 } from './core/ff1.js';
 export { FpeMasker, STRUCTURED_TYPES } from './core/fpe.js';

@@ -35,6 +35,7 @@ export class Vela {
         detectNames: config.detectNames ?? true,
         maskCitationParties: config.maskCitationParties ?? false,
       },
+      maxInputChars: config.maxInputChars ?? 2_000_000,
     };
     this.logger = new Logger('vela-core', config.enableLogging ?? false);
   }

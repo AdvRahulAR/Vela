@@ -1,6 +1,6 @@
 {
   "name": "vela-privacy",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "LLM privacy gateway — PII masking with NIST FF1 format-preserving encryption, reversible placeholders and streaming de-masking for OpenAI and Anthropic",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -29,7 +29,8 @@
     "smoke": "node scripts/smoke-pack.mjs",
     "prepublishOnly": "node scripts/guard-publish.mjs && npm run build",
     "lint": "eslint .",
-    "coverage": "c8 --check-coverage --lines 93 --branches 78 --functions 85 --include \"src/**\" --reporter=text-summary --reporter=lcov node scripts/run-tests.mjs"
+    "coverage": "c8 --check-coverage --lines 95 --branches 79 --functions 86 --include \"src/**\" --reporter=text-summary --reporter=lcov node scripts/run-tests.mjs",
+    "eval": "node --import tsx scripts/eval-corpus.ts"
   },
   "keywords": [
     "pii",

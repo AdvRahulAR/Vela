@@ -1,3 +1,4 @@
+import { VelaError } from '../core/errors.js';
 import { createServer, type Server } from 'node:http';
 import type { Vela } from '../core/vela.js';
 import { DEFAULT_ANTHROPIC_URL, DEFAULT_PROXY_HOST, DEFAULT_PROXY_PORT, DEFAULT_UPSTREAM_URL, PACKAGE_VERSION } from '../config/constants.js';
@@ -125,6 +126,10 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
       logger.error('proxy_request_error', err, { urlPath });
       if (res.headersSent) {
         res.end();
+        return;
+      }
+      if (err instanceof VelaError) {
+        sendJson(res, err.status, { error: { message: err.message, type: 'vela_error' } });
         return;
       }
       const msg = err instanceof Error ? err.message : 'Unknown proxy error';

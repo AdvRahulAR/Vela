@@ -276,7 +276,7 @@ const BUILTIN_PATTERNS: PatternDef[] = [
     // Labelled address: "Address: …" up to newline / next field
     type: 'ADDRESS',
     regex:
-      /\b(?:address|addr\.?|residential address|permanent address|residing at|resident of|r\/o)\s*[:\-–]?\s*([^\n;|]{6,160}?)(?=\s*(?:[\n;|]|$|(?<!\b[A-Z])\.(?:\s|$)|[,.]?\s*\b(?:phone|ph|mobile|mob|tel|email|e-mail|pan|aadhaar|dob|d\.o\.b|date of birth|gstin|passport|account|a\/c)\b))/gi,
+      /\b(?:address|addr\.?|residential address|permanent address|residing at|resident of|r\/o)\s*[:\-–]?\s*([^\n;|]{6,160}?)(?=\s*(?:[\n;|]|$|(?<!\b(?:[A-Z]|No|Nr|St|Rd|Opp|Apt|Bldg|Flat|Plot))\.(?:\s|$)|[,.]?\s*\b(?:phone|ph|mobile|mob|tel|email|e-mail|pan|aadhaar|dob|d\.o\.b|date of birth|gstin|passport|account|a\/c)\b))/gi,
     confidence: 0.9,
     group: 1,
   },
@@ -344,7 +344,12 @@ function detectNames(text: string): DetectedEntity[] {
   return out;
 }
 
-const LOWER_WORD = /(?<![\w@./_-])[a-z][a-z'’-]+(?![\w@./_-])/g;
+// Boundaries skip paths, identifiers and file names ("./emma.ts", "user_john") but
+// still allow sentence punctuation after the word ("I met deepa.").
+const LOWER_WORD = /(?<![\w@./_-])[a-z][a-z'’-]+(?![\w@/_-]|\.\w)/g;
+const LOWER_END = '(?![\\w@/_-]|\\.\\w)';
+/** Preceding code keyword: `import emma from …`, `const john = …`. */
+const CODE_KEYWORD_BEFORE = /\b(?:import|from|const|let|var|function|def|class|return|new|export|require|typeof|interface|type)\s+$/;
 
 /**
  * All-lowercase names ("rahul sharma called. arjun told deepa"): a gazetteer
@@ -363,9 +368,9 @@ function detectLowercaseNames(text: string): DetectedEntity[] {
     const strong = STRONG_NAME_CONTEXT.test(pre);
     if (!strong && (w.length < 4 || isLowercaseAmbiguous(w))) continue;
     let end = start + w.length;
-    // Code identifiers: `const john = 1`, `emma(`.
-    if (/^\s*[=(]/.test(text.slice(end, end + 3))) continue;
-    const next = /^ ([a-z][a-z'’-]+)(?![\w@./_-])/.exec(text.slice(end, end + 40));
+    // Code identifiers: `const john = 1`, `emma(`, `import emma from`.
+    if (/^\s*[=(]/.test(text.slice(end, end + 3)) || CODE_KEYWORD_BEFORE.test(pre)) continue;
+    const next = new RegExp(`^ ([a-z][a-z'’-]+)${LOWER_END}`).exec(text.slice(end, end + 40));
     if (next && isKnownSurname(next[1] as string) && !isNameStopword(next[1] as string)) {
       end += 1 + (next[1] as string).length;
       LOWER_WORD.lastIndex = end;
@@ -569,21 +574,28 @@ export function detectPii(text: string, options?: DetectOptions | string[]): Det
       }
     }
     if (components.size > 0) {
-      const variants = new Set<string>();
+      const cased = new Set<string>();
+      const lower = new Set<string>();
       for (const c of components) {
-        variants.add(c[0]!.toUpperCase() + c.slice(1).toLowerCase());
-        variants.add(c.toUpperCase());
+        cased.add(c[0]!.toUpperCase() + c.slice(1).toLowerCase());
+        cased.add(c.toUpperCase());
         // Lowercase re-mentions only for words that cannot be ordinary prose ("will", "brown").
-        if (c.length >= 4 && !isLowercaseAmbiguous(c)) variants.add(c.toLowerCase());
+        if (c.length >= 4 && !isLowercaseAmbiguous(c)) lower.add(c.toLowerCase());
       }
-      const re = new RegExp(`(?<![\\w@])(?:${[...variants].map(escapeRe).join('|')})(?![\\w@])`, 'g');
+      const alt = (s: Set<string>) => [...s].map(escapeRe).join('|');
+      const patterns = [new RegExp(`(?<![\\w@])(?:${alt(cased)})(?![\\w@])`, 'g')];
+      // Lowercase variants use the stricter code/path-aware boundaries of LOWER_WORD.
+      if (lower.size) patterns.push(new RegExp(`(?<![\\w@./_-])(?:${alt(lower)})${LOWER_END}`, 'g'));
       const extra: DetectedEntity[] = [];
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(full)) !== null) {
-        const s = m.index;
-        const e = s + m[0].length;
-        const ent: DetectedEntity = { type: 'PERSON', start: s, end: e, value: m[0], confidence: 0.8 };
-        if (!selected.some((x) => s < x.end && e > x.start) && outsideZones(ent, zones)) extra.push(ent);
+      for (const re of patterns) {
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(full)) !== null) {
+          const s = m.index;
+          const e = s + m[0].length;
+          const ent: DetectedEntity = { type: 'PERSON', start: s, end: e, value: m[0], confidence: 0.8 };
+          const taken = [...selected, ...extra].some((x) => s < x.end && e > x.start);
+          if (!taken && outsideZones(ent, zones)) extra.push(ent);
+        }
       }
       if (extra.length) selected = [...selected, ...extra].sort((a, b) => a.start - b.start);
     }
@@ -606,3 +618,9 @@ export function nameComponents(entities: DetectedEntity[]): string[] {
   }
   return out;
 }
+
+/** @internal Regexes exposed for the ReDoS / performance tests only. Not part of the public API. */
+export const __detectorRegexesForTests = {
+  builtin: BUILTIN_PATTERNS.map((p) => ({ type: p.type, regex: p.regex })),
+  names: { TITLE_SEQ, UPPER_SEQ, LOWER_WORD, CITATION_ZONE, BARE_VS_ANCHORED },
+};

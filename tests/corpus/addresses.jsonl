@@ -1,0 +1,7 @@
+{"text":"Office: 12 MG Road, Bengaluru 560001","entities":[{"type":"ADDRESS","value":"12 MG Road, Bengaluru 560001"}],"tags":["address"]}
+{"text":"Flat 3B, 22 Park Street, Kolkata 700016","entities":[{"type":"ADDRESS","value":"Flat 3B, 22 Park Street, Kolkata 700016"}],"tags":["address"]}
+{"text":"Address: 45, Gandhi Nagar, Kochi","entities":[{"type":"ADDRESS","value":"45, Gandhi Nagar, Kochi"}],"tags":["address","labelled"]}
+{"text":"r/o House No. 14, Sector 21, Gurugram 122001","entities":[{"type":"ADDRESS","value":"House No. 14, Sector 21, Gurugram 122001"}],"tags":["address","hard"]}
+{"text":"Ship to 4th Cross, Indiranagar, Bengaluru 560038","entities":[{"type":"ADDRESS","value":"4th Cross, Indiranagar, Bengaluru 560038"}],"tags":["address","hard"]}
+{"text":"Address: 45, Gandhi Nagar, Kochi. Phone 9876543210","entities":[{"type":"ADDRESS","value":"45, Gandhi Nagar, Kochi"},{"type":"PHONE","value":"9876543210"}],"tags":["address","overcapture"]}
+{"text":"resident of Plot No. 7, Banjara Hills.","entities":[{"type":"ADDRESS","value":"Plot No. 7, Banjara Hills"}],"tags":["address"]}

@@ -29,6 +29,7 @@ import {
   wrapOpenAiClient,
   wrapAnthropicClient,
   runProxy,
+  VelaInputTooLargeError,
 } from '../src/index.js';
 
 const KEY = new Uint8Array(32).fill(7);
@@ -650,5 +651,53 @@ describe('0.3.2 gap fixes', () => {
     const r = vela.mask('MAC 00:1A:2B:3C:4D:5E');
     assert.equal(r.text, 'MAC [MAC_ADDRESS_1]');
     assert.equal(vela.unmask(r.text, r).text, 'MAC 00:1A:2B:3C:4D:5E');
+  });
+});
+
+describe('0.3.3 fixes', () => {
+  it('a literal placeholder in a later JSON field cannot collide with a token issued earlier', () => {
+    const s = vela.createSession();
+    const value = [{ name: 'a@x.com, b@y.com, c@z.com' }, { note: 'literal [EMAIL_3] here' }];
+    const masked = s.maskValue(value);
+    assert.equal((masked[1] as { note: string }).note, 'literal [EMAIL_3] here');
+    assert.ok(!JSON.stringify(masked[0]).includes('[EMAIL_3]'), JSON.stringify(masked));
+    assert.deepEqual(s.unmaskValue(masked), value);
+  });
+
+  it('detects lowercase names before sentence punctuation but not in code or paths', () => {
+    const names = (t: string) => detectPii(t).filter((e) => e.type === 'PERSON').map((e) => e.value);
+    assert.deepEqual(names('I met deepa. later arjun came'), ['deepa', 'arjun']);
+    assert.deepEqual(names("const john = 1; import emma from './emma.ts';"), []);
+    assert.deepEqual(names('see ./rahul.txt and rahul_sharma.log'), []);
+  });
+
+  it('keeps abbreviations like "No." inside labelled addresses', () => {
+    const got = detectPii('r/o House No. 14, Sector 21, Gurugram 122001').map((e) => `${e.type}:${e.value}`);
+    assert.deepEqual(got, ['ADDRESS:House No. 14, Sector 21, Gurugram 122001']);
+  });
+
+  it('rejects oversized input with a typed error; the proxy answers 413 without forwarding', async () => {
+    const small = new Vela({ fpeKey: KEY, maxInputChars: 100 });
+    assert.throws(() => small.mask('x'.repeat(101)), (e: unknown) => e instanceof VelaInputTooLargeError && e.status === 413);
+    let upstreamHits = 0;
+    const up = createServer((_req, res) => {
+      upstreamHits++;
+      res.end('{}');
+    });
+    const upPort = await listen(up);
+    const proxy = runProxy(small, { port: 0, upstream: `http://127.0.0.1:${upPort}` });
+    await new Promise((r) => proxy.once('listening', r));
+    try {
+      const r = await fetch(`http://127.0.0.1:${(proxy.address() as AddressInfo).port}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'y'.repeat(500) }] }),
+      });
+      assert.equal(r.status, 413);
+      assert.equal(upstreamHits, 0);
+    } finally {
+      proxy.close();
+      up.close();
+    }
   });
 });

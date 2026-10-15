@@ -99,6 +99,12 @@ export interface VelaConfig {
    * always masked.
    */
   maskCitationParties?: boolean;
+  /**
+   * Largest single text (one prompt, one JSON string field) that will be masked.
+   * Larger input throws `VelaInputTooLargeError` (HTTP 413 in the proxy) rather
+   * than tying up the event loop. Default: 2,000,000 characters.
+   */
+  maxInputChars?: number;
   /** Enable structured JSON logging. Default: false. */
   enableLogging?: boolean;
 }

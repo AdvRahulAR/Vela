@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.3
+
+Reliability release: CI, deeper tests and the fixes they found. No API changes except the new `maxInputChars` option and error classes.
+
+- **Fix:** in `maskValue`, a placeholder-shaped literal in a later field (e.g. `[EMAIL_3]`) could collide with a placeholder issued for an earlier field, so restoration turned the literal into a real value. All leaves are now scanned before masking. Found by the new property-based tests.
+- **Fix:** all-lowercase names at the end of a sentence ("I met deepa.") were missed.
+- **Fix:** lowercase gazetteer names in code and file paths (`import emma from './emma.ts'`, `rahul_sharma.log`) are no longer tagged as people.
+- **Fix:** labelled addresses no longer stop at abbreviations such as "No." ("House No. 14, Sector 21…" was split and "14" leaked).
+- New `maxInputChars` option (default 2,000,000): a larger single text throws `VelaInputTooLargeError`; the proxy and Express middleware return HTTP 413 without forwarding. New exported `VelaError` base class; the proxy and middleware return its `status`.
+- Releases are now published from GitHub Actions with npm provenance, after tests pass on Node 18, 20, 22, 24 and Windows. A packed-install smoke test checks `require`, `import` and the CLI on every Node version.
+- New test suites: property-based tests (round-trip, no leakage, checksum validity, streaming, JSON, determinism), a labelled detection corpus with a recall/false-positive gate (`npm run eval`), and a ReDoS / performance guard for every detector regex.
+
 ## 0.3.2
 
 Fixes for the gaps found by an external test of 0.3.1.

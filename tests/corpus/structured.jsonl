@@ -1,0 +1,34 @@
+{"text":"My Aadhaar is 2345 6789 0124.","entities":[{"type":"AADHAAR","value":"2345 6789 0124"}],"tags":["id"]}
+{"text":"aadhaar no 456123789011 verified","entities":[{"type":"AADHAAR","value":"456123789011"}],"tags":["id"]}
+{"text":"UID: 9876-5432-1096","entities":[{"type":"AADHAAR","value":"9876-5432-1096"}],"tags":["id"]}
+{"text":"PAN ABCDE1234F filed","entities":[{"type":"PAN","value":"ABCDE1234F"}],"tags":["id"]}
+{"text":"pan abcde1234f (lowercase)","entities":[{"type":"PAN","value":"abcde1234f"}],"tags":["id","lowercase"]}
+{"text":"GSTIN 27ABCPE1234F1ZB on the invoice","entities":[{"type":"GSTIN","value":"27ABCPE1234F1ZB"}],"tags":["id"]}
+{"text":"Supplier GST: 32AAACM4567K1ZE","entities":[{"type":"GSTIN","value":"32AAACM4567K1ZE"}],"tags":["id"]}
+{"text":"IFSC HDFC0001234, A/c 50100123456789","entities":[{"type":"IFSC","value":"HDFC0001234"},{"type":"BANK_ACCOUNT","value":"50100123456789"}],"tags":["bank"]}
+{"text":"Passport K1234567 expires 2030","entities":[{"type":"PASSPORT","value":"K1234567"}],"tags":["id"]}
+{"text":"Voter ID: ABC1234567","entities":[{"type":"VOTER_ID","value":"ABC1234567"}],"tags":["id"]}
+{"text":"DL KL07 20110012345 issued at Kochi","entities":[{"type":"DRIVING_LICENCE","value":"KL07 20110012345"}],"tags":["id"]}
+{"text":"Pay via UPI rahul@okhdfc today","entities":[{"type":"UPI_ID","value":"rahul@okhdfc"}],"tags":["bank"]}
+{"text":"Card 4111 1111 1111 1111 exp 12/29","entities":[{"type":"CREDIT_CARD","value":"4111 1111 1111 1111"}],"tags":["card"]}
+{"text":"mastercard 5500005555555559","entities":[{"type":"CREDIT_CARD","value":"5500005555555559"}],"tags":["card"]}
+{"text":"Amex 3782 822463 10005","entities":[{"type":"CREDIT_CARD","value":"3782 822463 10005"}],"tags":["card"]}
+{"text":"IBAN GB82 WEST 1234 5698 7654 32 please","entities":[{"type":"IBAN","value":"GB82 WEST 1234 5698 7654 32"}],"tags":["bank"]}
+{"text":"DE89370400440532013000 is the account","entities":[{"type":"IBAN","value":"DE89370400440532013000"}],"tags":["bank"]}
+{"text":"Call me on +91 98765 43210","entities":[{"type":"PHONE","value":"+91 98765 43210"}],"tags":["phone"]}
+{"text":"mobile 9876543210","entities":[{"type":"PHONE","value":"9876543210"}],"tags":["phone"]}
+{"text":"US office (415) 555-2671","entities":[{"type":"PHONE","value":"(415) 555-2671"}],"tags":["phone"]}
+{"text":"London +44 20 7946 0958","entities":[{"type":"PHONE","value":"+44 20 7946 0958"}],"tags":["phone"]}
+{"text":"SSN 123-45-6789 on file","entities":[{"type":"SSN","value":"123-45-6789"}],"tags":["id"]}
+{"text":"server at 192.168.1.10 and 2001:db8::1","entities":[{"type":"IP_ADDRESS","value":"192.168.1.10"},{"type":"IP_ADDRESS","value":"2001:db8::1"}],"tags":["network"]}
+{"text":"device 00:1A:2B:3C:4D:5E","entities":[{"type":"MAC_ADDRESS","value":"00:1A:2B:3C:4D:5E"}],"tags":["network"]}
+{"text":"Email test@domain.com","entities":[{"type":"EMAIL","value":"test@domain.com"}],"tags":["email"]}
+{"text":"write to राहुल@उदाहरण.भारत","entities":[{"type":"EMAIL","value":"राहुल@उदाहरण.भारत"}],"tags":["email","indic"]}
+{"text":"contact 用户@例子.广告 or josé@exämple.com","entities":[{"type":"EMAIL","value":"用户@例子.广告"},{"type":"EMAIL","value":"josé@exämple.com"}],"tags":["email","unicode"]}
+{"text":"key sk-proj-abcdEFGH1234ijklMNOP5678","entities":[{"type":"SECRET_KEY","value":"sk-proj-abcdEFGH1234ijklMNOP5678"}],"tags":["secret"]}
+{"text":"AWS AKIAIOSFODNN7EXAMPLE","entities":[{"type":"SECRET_KEY","value":"AKIAIOSFODNN7EXAMPLE"}],"tags":["secret"]}
+{"text":"aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY","entities":[{"type":"SECRET_KEY","value":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}],"tags":["secret"]}
+{"text":"password=hunter2","entities":[{"type":"SECRET_KEY","value":"hunter2"}],"tags":["secret"]}
+{"text":"token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U","entities":[{"type":"JWT","value":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"}],"tags":["secret"]}
+{"text":"DOB 14/03/1990","entities":[{"type":"DATE_OF_BIRTH","value":"14/03/1990"}],"tags":["personal"]}
+{"text":"PIN code 682001","entities":[{"type":"PIN_CODE","value":"682001"}],"tags":["personal"]}
