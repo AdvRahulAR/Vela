@@ -32,7 +32,9 @@ export class QuantumKeyManager {
    * The secret key must remain local.
    */
   static generateKeyPair(): KeyPair {
-    const kp = ml_kem768.keygen();
+    // Randomness from node:crypto: @noble falls back to globalThis.crypto,
+    // which Node 18 does not expose by default.
+    const kp = ml_kem768.keygen(new Uint8Array(randomBytes(ml_kem768.lengths.seed ?? 64)));
     return {
       publicKey: kp.publicKey,
       secretKey: kp.secretKey,
@@ -44,7 +46,7 @@ export class QuantumKeyManager {
    * Returns ciphertext (to transmit) and 32-byte shared secret (to use locally).
    */
   static encapsulate(peerPublicKey: Uint8Array): EncapsulationResult {
-    const res = ml_kem768.encapsulate(peerPublicKey);
+    const res = ml_kem768.encapsulate(peerPublicKey, new Uint8Array(randomBytes(ml_kem768.lengths.msgRand ?? 32)));
     return {
       cipherText: res.cipherText,
       sharedSecret: res.sharedSecret,

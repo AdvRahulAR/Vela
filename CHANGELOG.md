@@ -11,6 +11,7 @@ Fixes for the gaps found by an external test of 0.3.1.
 - Emails containing combining marks (Devanagari and similar scripts, e.g. `राहुल@उदाहरण.भारत`) are detected.
 - Version strings (`v1.2.3.4`, `version 1.2.3.4`, `upgraded to 2.0.1.3`) are no longer masked as IP addresses.
 - New detections: `password=` / `api_key:` / `token=` style credentials (also in JSON fields), AWS secret access keys, and `MAC_ADDRESS` (colon, dash and Cisco dot formats; placeholder).
+- **Fix:** `require('vela-privacy')` crashed on Node versions without `require(esm)` support (18, 20 before 20.19, 22 before 22.12) because the ESM-only `@noble/*` packages were loaded with `require`. They are now bundled into the CommonJS build and CLI. ML-KEM key generation and encapsulation take randomness from `node:crypto`, so they also work on Node 18, which has no global `crypto`.
 
 ## 0.3.1
 

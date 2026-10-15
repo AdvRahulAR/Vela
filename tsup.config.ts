@@ -1,11 +1,27 @@
 import { defineConfig } from 'tsup';
 
+// @noble/* packages are ESM-only. Bundle them into the CommonJS outputs so
+// `require('vela-privacy')` works on every supported Node version (Node 18+),
+// not just those with require(esm) support (20.19+ / 22.12+).
+const NOBLE = [/^@noble\//];
+
 export default defineConfig([
   {
     entry: ['src/index.ts'],
-    format: ['cjs', 'esm'],
+    format: ['esm'],
     dts: true,
     clean: true,
+    sourcemap: true,
+    treeshake: true,
+    splitting: false,
+    outDir: 'dist',
+  },
+  {
+    entry: ['src/index.ts'],
+    format: ['cjs'],
+    noExternal: NOBLE,
+    dts: true,
+    clean: false,
     sourcemap: true,
     treeshake: true,
     splitting: false,
@@ -16,7 +32,7 @@ export default defineConfig([
       'bin/vela-cli': 'bin/vela-cli.ts',
     },
     format: ['cjs'],
-    noExternal: ['@noble/post-quantum'],
+    noExternal: NOBLE,
     clean: false,
     sourcemap: false,
     outDir: 'dist',
