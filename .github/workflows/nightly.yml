@@ -1,0 +1,32 @@
+name: Nightly deep tests
+
+on:
+  schedule:
+    - cron: '30 21 * * *' # 03:00 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Property tests at 5,000 runs each
+        run: npm test
+        env:
+          VELA_PBT_RUNS: '5000'
+      - name: Detection corpus report
+        if: always()
+        run: npm run eval > corpus-report.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: corpus-report
+          path: corpus-report.txt
