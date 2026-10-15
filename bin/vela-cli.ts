@@ -1,11 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { Vela } from '../src/core/vela.js';
+import type { VelaConfig } from '../src/types.js';
 import { QuantumKeyManager } from '../src/core/quantum.js';
 import { runProxy } from '../src/integrations/proxy.js';
+import { presidioRecognizer } from '../src/integrations/presidio.js';
 import { PACKAGE_VERSION } from '../src/config/constants.js';
 
 const SHORT: Record<string, string> = { p: 'port', u: 'upstream', k: 'key', g: 'glossary', H: 'host', a: 'api-key', h: 'help', v: 'version' };
-const BOOLEAN = new Set(['help', 'version', 'kem', 'json', 'no-passthrough']);
+const BOOLEAN = new Set(['help', 'version', 'kem', 'json', 'no-passthrough', 'presidio-optional']);
 
 export function parseArgs(args: string[]): { flags: Record<string, string | boolean>; positionals: string[] } {
   const flags: Record<string, string | boolean> = {};
@@ -62,11 +64,14 @@ PROXY OPTIONS:
                         masking /v1/embeddings input)
   --key, -k <hex>       32-byte FPE key as 64 hex chars (or env VELA_FPE_KEY; default: random per process)
   --glossary, -g <s>    Comma-separated confidential terms to always mask
+  --presidio-url <url>  Presidio Analyzer URL for NER-based name/location detection. If it is down,
+                        requests are rejected with 503 (add --presidio-optional to fall back instead)
 
   Send header "x-vela-session: <conversation-id>" to keep masking stable across turns.
 
 MASK OPTIONS:
   --glossary, -g <s>    Comma-separated confidential terms
+  --presidio-url <url>  Presidio Analyzer URL for NER-based detection
   --json                Print machine-readable JSON
 
 EXAMPLES:
@@ -85,6 +90,15 @@ function readKey(flags: Record<string, string | boolean>): Uint8Array | undefine
     process.exit(1);
   }
   return key;
+}
+
+function nerConfig(flags: Record<string, string | boolean>): Pick<VelaConfig, 'asyncRecognizers' | 'recognizerFailure'> {
+  const url = flags['presidio-url'] ?? process.env['VELA_PRESIDIO_URL'];
+  if (typeof url !== 'string' || !url) return {};
+  return {
+    asyncRecognizers: [presidioRecognizer({ url })],
+    recognizerFailure: flags['presidio-optional'] === true ? 'continue' : 'block',
+  };
 }
 
 const glossaryOf = (flags: Record<string, string | boolean>): string[] | undefined =>
@@ -127,8 +141,8 @@ async function main(): Promise<void> {
     }
     const key = readKey(flags);
     const glossary = glossaryOf(flags);
-    const vela = new Vela({ ...(key ? { fpeKey: key } : {}), ...(glossary ? { glossary } : {}) });
-    const masked = vela.mask(text);
+    const vela = new Vela({ ...(key ? { fpeKey: key } : {}), ...(glossary ? { glossary } : {}), ...nerConfig(flags) });
+    const masked = await vela.maskAsync(text);
     if (flags['json']) {
       console.log(JSON.stringify({ text: masked.text, replacements: masked.replacements }, null, 2));
       return;
@@ -150,7 +164,9 @@ async function main(): Promise<void> {
     const key = readKey(flags);
     if (!key) console.log('[vela] No --key provided — using a random key for this process.');
     const glossary = glossaryOf(flags);
-    const vela = new Vela({ ...(key ? { fpeKey: key } : {}), ...(glossary ? { glossary } : {}), enableLogging: true });
+    const ner = nerConfig(flags);
+    if (ner.asyncRecognizers) console.log(`[vela] NER via Presidio (${ner.recognizerFailure === 'block' ? 'requests blocked if it is unavailable' : 'falls back to built-in detection'})`);
+    const vela = new Vela({ ...(key ? { fpeKey: key } : {}), ...(glossary ? { glossary } : {}), ...ner, enableLogging: true });
     runProxy(vela, {
       ...(port !== undefined ? { port } : {}),
       ...(typeof flags['host'] === 'string' ? { host: flags['host'] } : {}),

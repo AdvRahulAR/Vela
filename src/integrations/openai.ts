@@ -7,7 +7,7 @@ import {
   type EventUnmasker,
   type RestoreSource,
 } from '../core/streaming.js';
-import { maskLlmRequest } from './formats.js';
+import { maskLlmRequest, maskLlmRequestAsync } from './formats.js';
 import type { MaskResult, OpenAIRequest, OpenAIResponse, SessionOptions } from '../types.js';
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -35,6 +35,28 @@ export function maskOpenAiResponsesRequest<T extends object>(
 ): { payload: T; results: MaskResult[]; session: MaskSession } {
   const session = opts.session ?? vela.createSession(opts);
   const payload = maskLlmRequest(session, 'openai-responses', request);
+  return { payload, results: [session.toResult()], session };
+}
+
+/** maskOpenAiRequest() that first runs any configured async recognizers (NER services). */
+export async function maskOpenAiRequestAsync(
+  vela: Vela,
+  request: OpenAIRequest,
+  opts: SessionOptions & { session?: MaskSession } = {},
+): Promise<{ payload: OpenAIRequest; results: MaskResult[]; session: MaskSession }> {
+  const session = opts.session ?? vela.createSession(opts);
+  const payload = await maskLlmRequestAsync(session, 'openai-chat', request);
+  return { payload, results: [session.toResult()], session };
+}
+
+/** maskOpenAiResponsesRequest() that first runs any configured async recognizers (NER services). */
+export async function maskOpenAiResponsesRequestAsync<T extends object>(
+  vela: Vela,
+  request: T,
+  opts: SessionOptions & { session?: MaskSession } = {},
+): Promise<{ payload: T; results: MaskResult[]; session: MaskSession }> {
+  const session = opts.session ?? vela.createSession(opts);
+  const payload = await maskLlmRequestAsync(session, 'openai-responses', request);
   return { payload, results: [session.toResult()], session };
 }
 
@@ -122,7 +144,7 @@ export function wrapOpenAiClient<T extends OpenAICompatibleClient>(client: T, ve
   wrappedCompletions.create = async (params: OpenAIRequest, ...rest: unknown[]) => {
     const sid = resolveSessionId(opts.sessionId, params);
     const session = vela.createSession(sid !== undefined ? { sessionId: sid } : {});
-    const payload = maskLlmRequest(session, 'openai-chat', params);
+    const payload = await maskLlmRequestAsync(session, 'openai-chat', params);
     const result = await originalCreate(payload, ...rest);
     if (isAsyncIterable(result)) return wrapAsyncIterable(result, new OpenAiChatStreamUnmasker(session));
     return session.unmaskValue(result);
@@ -138,7 +160,7 @@ export function wrapOpenAiClient<T extends OpenAICompatibleClient>(client: T, ve
     wrappedResponses.create = async (params: Json, ...rest: unknown[]) => {
       const sid = resolveSessionId(opts.sessionId, params);
       const session = vela.createSession(sid !== undefined ? { sessionId: sid } : {});
-      const payload = maskLlmRequest(session, 'openai-responses', params);
+      const payload = await maskLlmRequestAsync(session, 'openai-responses', params);
       const result = await originalResponses(payload, ...rest);
       if (isAsyncIterable(result)) return wrapAsyncIterable(result, new ResponsesStreamUnmasker(session));
       return session.unmaskValue(result);

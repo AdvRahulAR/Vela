@@ -1,7 +1,7 @@
 import type { Vela } from '../core/vela.js';
 import type { MaskSession } from '../core/session.js';
 import { AnthropicStreamUnmasker, toRestoreSource } from '../core/streaming.js';
-import { maskLlmRequest } from './formats.js';
+import { maskLlmRequest, maskLlmRequestAsync } from './formats.js';
 import { wrapAsyncIterable, type WrapClientOptions } from './openai.js';
 import type { MaskResult, SessionOptions } from '../types.js';
 
@@ -18,6 +18,17 @@ export function maskAnthropicRequest<T extends object>(
 ): { payload: T; results: MaskResult[]; session: MaskSession } {
   const session = opts.session ?? vela.createSession(opts);
   const payload = maskLlmRequest(session, 'anthropic-messages', request);
+  return { payload, results: [session.toResult()], session };
+}
+
+/** maskAnthropicRequest() that first runs any configured async recognizers (NER services). */
+export async function maskAnthropicRequestAsync<T extends object>(
+  vela: Vela,
+  request: T,
+  opts: SessionOptions & { session?: MaskSession } = {},
+): Promise<{ payload: T; results: MaskResult[]; session: MaskSession }> {
+  const session = opts.session ?? vela.createSession(opts);
+  const payload = await maskLlmRequestAsync(session, 'anthropic-messages', request);
   return { payload, results: [session.toResult()], session };
 }
 
@@ -53,7 +64,7 @@ export function wrapAnthropicClient<T extends AnthropicCompatibleClient>(client:
   wrappedMessages.create = async (params: Json, ...rest: unknown[]) => {
     const sid = typeof opts.sessionId === 'function' ? opts.sessionId(params) : opts.sessionId;
     const session = vela.createSession(sid !== undefined ? { sessionId: sid } : {});
-    const payload = maskLlmRequest(session, 'anthropic-messages', params);
+    const payload = await maskLlmRequestAsync(session, 'anthropic-messages', params);
     const result = await original(payload, ...rest);
     if (result && typeof result === 'object' && Symbol.asyncIterator in result) {
       return wrapAsyncIterable(result, new AnthropicStreamUnmasker(session));

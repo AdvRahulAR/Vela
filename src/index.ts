@@ -1,6 +1,6 @@
 // Core
 export { Vela } from './core/vela.js';
-export { VelaError, VelaInputTooLargeError } from './core/errors.js';
+export { VelaError, VelaInputTooLargeError, VelaRecognizerError, VelaNotPreparedError } from './core/errors.js';
 export { MaskSession } from './core/session.js';
 export { FF1 } from './core/ff1.js';
 export { FpeMasker, STRUCTURED_TYPES } from './core/fpe.js';
@@ -27,7 +27,9 @@ export { validateGstin, gstinCheckChar } from './core/algorithms/gstin.js';
 // Integrations
 export {
   maskOpenAiRequest,
+  maskOpenAiRequestAsync,
   maskOpenAiResponsesRequest,
+  maskOpenAiResponsesRequestAsync,
   unmaskOpenAiResponse,
   unmaskOpenAiStream,
   unmaskOpenAiResponsesStream,
@@ -36,11 +38,13 @@ export {
 } from './integrations/openai.js';
 export {
   maskAnthropicRequest,
+  maskAnthropicRequestAsync,
   unmaskAnthropicResponse,
   unmaskAnthropicStream,
   wrapAnthropicClient,
 } from './integrations/anthropic.js';
-export { detectApiFormat, maskLlmRequest } from './integrations/formats.js';
+export { detectApiFormat, maskLlmRequest, maskLlmRequestAsync } from './integrations/formats.js';
+export { presidioRecognizer, codePointToUtf16Index, type PresidioRecognizerOptions } from './integrations/presidio.js';
 export { forwardLlmRequest } from './integrations/gateway.js';
 export { createFetchInterceptor } from './integrations/fetch.js';
 export { createExpressMiddleware } from './integrations/express.js';
@@ -71,6 +75,8 @@ export type {
   DetectedEntity,
   CustomDetector,
   EntityRecognizer,
+  AsyncEntityRecognizer,
+  RecognizedSpan,
   VelaConfig,
   SessionOptions,
   Replacement,

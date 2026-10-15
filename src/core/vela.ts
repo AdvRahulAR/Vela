@@ -36,6 +36,11 @@ export class Vela {
         maskCitationParties: config.maskCitationParties ?? false,
       },
       maxInputChars: config.maxInputChars ?? 2_000_000,
+      asyncRecognizers: config.asyncRecognizers ?? [],
+      recognizerFailure: config.recognizerFailure ?? 'block',
+      recognizerTimeoutMs: config.recognizerTimeoutMs ?? 5000,
+      onRecognizerFailure: (err) =>
+        this.logger.warn('recognizer_failed_continuing', { error: err instanceof Error ? err.message : String(err) }),
     };
     this.logger = new Logger('vela-core', config.enableLogging ?? false);
   }
@@ -68,6 +73,16 @@ export class Vela {
       Date.now() - start,
     );
     return result;
+  }
+
+  /**
+   * Like mask(), but first runs any configured async recognizers (NER
+   * services). Works with or without `asyncRecognizers`.
+   */
+  async maskAsync(text: string, session?: MaskSession): Promise<MaskResult> {
+    const s = session ?? this.createSession();
+    await s.prepare([text]);
+    return this.mask(text, s);
   }
 
   /** Restore original values in an LLM response. */

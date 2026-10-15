@@ -1,7 +1,7 @@
 import type { Vela } from '../core/vela.js';
 import { createSseTransformer } from '../core/streaming.js';
 import { SESSION_HEADER } from '../config/constants.js';
-import { detectApiFormat, maskLlmRequest } from './formats.js';
+import { detectApiFormat, maskLlmRequestAsync } from './formats.js';
 
 const STRIP_REQUEST_HEADERS = [
   'host',
@@ -65,7 +65,7 @@ export async function forwardLlmRequest(vela: Vela, req: ForwardRequest, opts: F
 
   const sessionId = req.headers.get(SESSION_HEADER) ?? opts.sessionId ?? undefined;
   const session = vela.createSession(sessionId ? { sessionId } : {});
-  const payload = maskLlmRequest(session, format, body);
+  const payload = await maskLlmRequestAsync(session, format, body);
 
   const headers = new Headers(req.headers);
   for (const k of STRIP_REQUEST_HEADERS) headers.delete(k);
@@ -179,6 +179,7 @@ export async function forwardPassthrough(vela: Vela, req: ForwardRequest, opts: 
   if (body && req.method.toUpperCase() === 'POST' && isEmbeddingsPath(url.pathname)) {
     const parsed = JSON.parse(body) as Record<string, unknown>;
     const session = vela.createSession({});
+    await session.prepareValue(parsed.input);
     if (typeof parsed.input === 'string') parsed.input = session.mask(parsed.input);
     else if (Array.isArray(parsed.input)) {
       parsed.input = parsed.input.map((v) => (typeof v === 'string' ? session.mask(v) : v));

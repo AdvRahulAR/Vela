@@ -3,9 +3,17 @@ import { STANDARD_ENTITY_TYPES } from '../config/constants.js';
 import { detectPii, nameComponents, type DetectOptions } from './detector.js';
 import type { FpeMasker } from './fpe.js';
 import { personComponents } from './names.js';
-import { VelaInputTooLargeError } from './errors.js';
+import { VelaInputTooLargeError, VelaNotPreparedError, VelaRecognizerError } from './errors.js';
 import { Restorer, type RestoreOptions, type StreamRestorer } from './matcher.js';
-import type { DetectedEntity, EntityType, MaskResult, Replacement, SessionOptions } from '../types.js';
+import type {
+  AsyncEntityRecognizer,
+  DetectedEntity,
+  EntityType,
+  MaskResult,
+  RecognizedSpan,
+  Replacement,
+  SessionOptions,
+} from '../types.js';
 
 /** JSON keys whose string values are themselves JSON documents (tool-call arguments). */
 const JSON_STRING_KEYS = new Set(['arguments', 'partial_json']);
@@ -18,6 +26,25 @@ export interface SessionEngine {
   detect: Omit<DetectOptions, 'knownNames' | 'prefix'>;
   /** Largest single text accepted by mask()/learn(); larger input throws VelaInputTooLargeError. */
   maxInputChars: number;
+  asyncRecognizers: AsyncEntityRecognizer[];
+  recognizerFailure: 'block' | 'continue';
+  recognizerTimeoutMs: number;
+  /** Called when a recognizer fails and recognizerFailure is 'continue'. */
+  onRecognizerFailure?: (err: unknown) => void;
+}
+
+/** Strings an NER service can't find anything in: skip the round trip. */
+const isTrivial = (s: string): boolean => s.length < 3 || !/[\p{L}\p{N}]/u.test(s);
+
+function withTimeout<T>(p: Promise<T>, ms: number, controller: AbortController): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`recognizer timed out after ${ms} ms`));
+    }, ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
 function humanizeKey(key: string): string {
@@ -42,6 +69,8 @@ export class MaskSession {
   /** PERSON replacements with their normalised name components, for partial-mention linking. */
   private readonly persons: Array<{ rep: Replacement; components: Set<string> }> = [];
   private readonly linkPartialNames: boolean;
+  /** Spans from async recognizers, per exact text, filled by prepare(). */
+  private readonly prepared = new Map<string, RecognizedSpan[]>();
   private restorer: Restorer | null = null;
 
   constructor(
@@ -71,10 +100,88 @@ export class MaskSession {
     this.checkSize(text);
     this.reserveLiteralTokens(text);
     if (this.engine.detect.detectNames === false) return;
-    const ents = detectPii(text, { ...this.engine.detect, knownNames: this.knownNames, ...(prefix ? { prefix } : {}) });
+    const ents = detectPii(text, {
+      ...this.engine.detect,
+      knownNames: this.knownNames,
+      ...(prefix ? { prefix } : {}),
+      ...this.precomputedFor(text),
+    });
     for (const n of nameComponents(ents)) this.knownNames.add(n);
     // Register full names now so a partial mention in an earlier message links to them.
     this.registerFullNames(ents, text);
+  }
+
+  /** True when async recognizers are configured, so text must be prepared before masking. */
+  get needsPreparation(): boolean {
+    return this.engine.asyncRecognizers.length > 0;
+  }
+
+  /**
+   * Run the async recognizers (NER services) over `texts` once, ahead of
+   * mask()/learn(). Required when `asyncRecognizers` is configured. On failure,
+   * throws VelaRecognizerError ('block', the default) or falls back to built-in
+   * detection ('continue').
+   */
+  async prepare(texts: Iterable<string>): Promise<void> {
+    if (!this.needsPreparation) return;
+    const todo: string[] = [];
+    for (const t of new Set(texts)) {
+      if (typeof t !== 'string' || this.prepared.has(t)) continue;
+      this.checkSize(t);
+      if (isTrivial(t)) this.prepared.set(t, []);
+      else todo.push(t);
+    }
+    if (todo.length === 0) return;
+
+    const merged: RecognizedSpan[][] = todo.map(() => []);
+    for (const rec of this.engine.asyncRecognizers) {
+      const controller = new AbortController();
+      try {
+        const res = await withTimeout(rec(todo, controller.signal), this.engine.recognizerTimeoutMs, controller);
+        if (!Array.isArray(res) || res.length !== todo.length) {
+          throw new Error(`recognizer returned ${Array.isArray(res) ? res.length : typeof res} results for ${todo.length} texts`);
+        }
+        res.forEach((spans, i) => {
+          const text = todo[i] as string;
+          for (const s of Array.isArray(spans) ? spans : []) {
+            if (Number.isInteger(s.start) && Number.isInteger(s.end) && s.start >= 0 && s.end > s.start && s.end <= text.length) {
+              (merged[i] as RecognizedSpan[]).push(s);
+            }
+          }
+        });
+      } catch (err) {
+        if (this.engine.recognizerFailure === 'block') throw new VelaRecognizerError(err);
+        this.engine.onRecognizerFailure?.(err);
+      }
+    }
+    todo.forEach((t, i) => this.prepared.set(t, merged[i] as RecognizedSpan[]));
+  }
+
+  /**
+   * prepare() every string in a JSON-like value, including the leaves of
+   * strings that are themselves JSON documents (tool-call arguments). Collects a
+   * superset of what maskValue()/maskLlmRequest() will mask.
+   */
+  async prepareValue(value: unknown): Promise<void> {
+    if (!this.needsPreparation) return;
+    const out: string[] = [];
+    const walk = (v: unknown): void => {
+      if (typeof v === 'string') {
+        out.push(v);
+        const parsed = tryParseJson(v);
+        if (parsed && typeof parsed === 'object') walk(parsed);
+      } else if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+    };
+    walk(value);
+    await this.prepare(out);
+  }
+
+  private precomputedFor(text: string): { precomputed?: RecognizedSpan[] } {
+    if (!this.needsPreparation) return {};
+    const spans = this.prepared.get(text);
+    if (spans === undefined) throw new VelaNotPreparedError();
+    return { precomputed: spans };
   }
 
   /** Create replacements for multi-word person names first (longest first), so partial mentions link to them. */
@@ -97,6 +204,7 @@ export class MaskSession {
       ...this.engine.detect,
       knownNames: this.knownNames,
       ...(prefix ? { prefix } : {}),
+      ...this.precomputedFor(text),
     });
     for (const n of nameComponents(entities)) this.knownNames.add(n);
     this.registerFullNames(entities, text);

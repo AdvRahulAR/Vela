@@ -1,5 +1,5 @@
 import { isIPv6 } from 'node:net';
-import type { CustomDetector, DetectedEntity, EntityRecognizer, EntityType } from '../types.js';
+import type { CustomDetector, DetectedEntity, EntityRecognizer, EntityType, RecognizedSpan } from '../types.js';
 import { validateVerhoeff } from './algorithms/verhoeff.js';
 import { validateLuhn } from './algorithms/luhn.js';
 import { validateIban } from './algorithms/iban.js';
@@ -427,6 +427,8 @@ export interface DetectOptions {
   validateChecksums?: boolean;
   customDetectors?: CustomDetector[];
   recognizers?: EntityRecognizer[];
+  /** Spans already found for `text` by async recognizers (offsets relative to `text`, not `prefix`). */
+  precomputed?: RecognizedSpan[];
   detectNames?: boolean;
   /** Mask party names inside reported court citations. Default: false (citations are public record). */
   maskCitationParties?: boolean;
@@ -550,6 +552,14 @@ export function detectPii(text: string, options?: DetectOptions | string[]): Det
       if (r.end <= r.start || r.start < 0 || r.end > full.length) continue;
       found.push({ type: r.type, start: r.start, end: r.end, value: full.slice(r.start, r.end), confidence: r.confidence ?? 0.85 });
     }
+  }
+
+  // Spans from async recognizers, found on `text` alone; shift past the context prefix.
+  for (const r of opts.precomputed ?? []) {
+    if (r.end <= r.start || r.start < 0 || r.end > text.length) continue;
+    const start = r.start + prefix.length;
+    const end = r.end + prefix.length;
+    found.push({ type: r.type, start, end, value: full.slice(start, end), confidence: r.confidence ?? 0.85 });
   }
 
   if (opts.detectNames !== false) {

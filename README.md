@@ -36,6 +36,15 @@ Rahul Sharma (PAN ABCDE1234F, Aadhaar 2345 6789 0124, +91 98765 43210, rahul@com
 | Providers | — | OpenAI Chat Completions, OpenAI Responses, Anthropic Messages |
 | Surfaces | — | SDK, OpenAI & Anthropic client wrappers, fetch interceptor, Express, standalone proxy, CLI |
 
+## Project status
+
+Vela is **pre-1.0 and has not yet been independently security-reviewed**. What that means in practice:
+
+- **The encryption and restoration are well tested.** FF1 matches NIST's official vectors, and every release passes property-based tests (round-trip, no leakage, checksum validity, streaming), a labelled detection corpus and a regex denial-of-service guard on Node 18 to 24.
+- **Detection without NER is best-effort.** Structured identifiers have 100% recall on the test corpus. Names and addresses are found by heuristics and are missed in Indian scripts, for rare names and in free-form addresses (current corpus recall: about 77% for names and 71% for addresses).
+- **Recommended production setup:** the proxy or a client wrapper, a [Presidio NER service](examples/presidio/README.md) with `recognizerFailure: 'block'` (the default), and a `sessionId` per conversation.
+- Read the [threat model](docs/THREAT_MODEL.md) for what Vela does and does not protect against, and [SECURITY.md](SECURITY.md) to report a vulnerability.
+
 ---
 
 ## Installation
@@ -190,6 +199,26 @@ new Vela({
 // "Employee EMP-12345" -> "Employee [EMP_ID_1]"
 ```
 
+### NER services (async recognizers)
+
+Real NER models usually run as a service, so Vela also accepts **async, batched recognizers**. They run once per request, before masking. A ready-made adapter for [Microsoft Presidio](examples/presidio/README.md) is included:
+
+```typescript
+import { Vela, presidioRecognizer } from 'vela-privacy';
+
+const vela = new Vela({
+  asyncRecognizers: [presidioRecognizer({ url: 'http://localhost:5002' })],
+  recognizerFailure: 'block',   // default: Presidio down => request rejected (HTTP 503), nothing sent
+  recognizerTimeoutMs: 5000,    // default
+});
+
+await vela.maskAsync('Thiruvenkatam called');      // or let the proxy / wrappers / fetch interceptor do it
+```
+
+- The proxy, fetch interceptor, Express middleware and client wrappers run async recognizers automatically. CLI: `vela proxy --presidio-url http://localhost:5002`.
+- If you mask requests yourself, use `maskAsync()` or the `*Async` helpers (`maskOpenAiRequestAsync`, `maskAnthropicRequestAsync`, `maskOpenAiResponsesRequestAsync`). Synchronous `mask()` throws `VelaNotPreparedError` while async recognizers are configured, so no text can skip NER by accident.
+- Your own recognizer is a function `(texts: string[], signal: AbortSignal) => Promise<RecognizedSpan[][]>` returning one span list per input text, with JavaScript (UTF-16) offsets.
+
 ---
 
 ## Benchmarks
@@ -214,6 +243,9 @@ Run `npm run benchmark` to reproduce.
 4. **Post-quantum key distribution (optional):** `QuantumKeyManager` uses ML-KEM-768 (FIPS 203) plus HKDF-SHA256 to agree on a shared FPE key between services, and seals keys in transit with AES-256-GCM. The sealing key gets its own HKDF label, and optional AAD is supported. The masking itself is symmetric AES-based FF1, which is not vulnerable to known quantum attacks at 256 bits.
 5. **The proxy listens on loopback by default.** If you expose it, put authentication in front of it.
 6. **Logging** records entity counts and timings only, never values.
+7. **Input limits and NER failures fail closed.** Text longer than `maxInputChars` is rejected (HTTP 413), and a failed or timed-out async recognizer rejects the request (HTTP 503) unless you opt into `recognizerFailure: 'continue'`. In both cases nothing is sent upstream.
+
+See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for the full list of guarantees and non-guarantees, and [docs/REVIEW_GUIDE.md](docs/REVIEW_GUIDE.md) for security reviewers.
 
 ## Upgrading from 0.2.x
 

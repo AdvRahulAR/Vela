@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+NER services as a first-class, fail-closed detection path.
+
+- **Async recognizers:** new `asyncRecognizers` option for batched, asynchronous recognizers such as an NER service. They run once per request before masking. Spans use JavaScript string offsets and are merged with built-in detection; unknown types are always masked.
+- **Presidio adapter:** `presidioRecognizer({ url })` calls a Microsoft Presidio Analyzer and converts its code-point offsets to JavaScript offsets (emoji and other astral characters no longer shift spans). Example setup in `examples/presidio/`. CLI: `vela proxy --presidio-url <url>` (add `--presidio-optional` to fall back instead of blocking) and `vela mask --presidio-url <url>`.
+- **Fail closed:** `recognizerFailure: 'block'` (default) rejects the request with `VelaRecognizerError` if a recognizer fails or exceeds `recognizerTimeoutMs` (default 5000). The proxy and Express middleware return HTTP 503 and send nothing upstream. `'continue'` falls back to built-in detection and logs a warning.
+- **New async API:** `vela.maskAsync()`, `session.prepare()` / `session.prepareValue()`, `maskLlmRequestAsync()`, `maskOpenAiRequestAsync()`, `maskOpenAiResponsesRequestAsync()`, `maskAnthropicRequestAsync()`. The proxy, fetch interceptor, Express middleware and both client wrappers use the async path automatically, with no behaviour or latency change when no async recognizers are configured.
+- **Breaking (only with `asyncRecognizers` set):** synchronous `vela.mask()`, `session.mask()` and the sync request helpers throw `VelaNotPreparedError` for text that hasn't been prepared, so text can't skip NER by accident. Without `asyncRecognizers` nothing changes.
+- Docs: README "Project status" section, threat model, security reviewer guide and `SECURITY.md`.
+
 ## 0.3.3
 
 Reliability release: CI, deeper tests and the fixes they found. No API changes except the new `maxInputChars` option and error classes.

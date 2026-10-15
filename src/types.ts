@@ -62,6 +62,21 @@ export type EntityRecognizer = (
   text: string,
 ) => Array<{ type: EntityType; start: number; end: number; confidence?: number }>;
 
+/** A span found by a recognizer. Offsets are UTF-16 code units into the text (JavaScript string indices). */
+export interface RecognizedSpan {
+  type: EntityType;
+  start: number;
+  end: number;
+  confidence?: number;
+}
+
+/**
+ * An asynchronous, batched recognizer, typically a call to an NER service
+ * (see `presidioRecognizer`). Receives every text of a request at once and
+ * returns one array of spans per text, in the same order. Must honour `signal`.
+ */
+export type AsyncEntityRecognizer = (texts: string[], signal: AbortSignal) => Promise<RecognizedSpan[][]>;
+
 export interface VelaConfig {
   /** 32-byte FPE key. If omitted, a random ephemeral key is generated per Vela instance. */
   fpeKey?: Uint8Array;
@@ -85,6 +100,21 @@ export interface VelaConfig {
   validateChecksums?: boolean;
   /** Custom detectors to run alongside built-in detectors. */
   customDetectors?: CustomDetector[];
+  /**
+   * Async recognizers (NER services such as Presidio) run before masking. When
+   * set, use `vela.maskAsync()` or the `*Async` request helpers; the proxy,
+   * fetch interceptor, Express middleware and client wrappers do this for you.
+   * Synchronous `mask()` throws `VelaNotPreparedError` on unprepared text.
+   */
+  asyncRecognizers?: AsyncEntityRecognizer[];
+  /**
+   * What to do when an async recognizer fails or times out. 'block' (default)
+   * throws `VelaRecognizerError` (HTTP 503 in the proxy) and sends nothing
+   * upstream. 'continue' falls back to built-in detection for that request.
+   */
+  recognizerFailure?: 'block' | 'continue';
+  /** Timeout for one async recognizer call, in milliseconds. Default: 5000. */
+  recognizerTimeoutMs?: number;
   /** Extra recognizers (e.g. NER models) run alongside the built-in detectors. */
   recognizers?: EntityRecognizer[];
   /**

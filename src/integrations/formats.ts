@@ -149,3 +149,12 @@ export function maskLlmRequest<T extends object>(session: MaskSession, format: L
     return session.maskValue(v);
   }) as T;
 }
+
+/**
+ * maskLlmRequest() preceded by the async recognizers (NER services), if any
+ * are configured. All built-in integrations use this.
+ */
+export async function maskLlmRequestAsync<T extends object>(session: MaskSession, format: LlmApiFormat, body: T): Promise<T> {
+  await session.prepareValue(body);
+  return maskLlmRequest(session, format, body);
+}

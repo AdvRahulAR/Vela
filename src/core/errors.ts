@@ -18,3 +18,30 @@ export class VelaInputTooLargeError extends VelaError {
     super(`Input of ${length} characters exceeds maxInputChars (${limit})`, 413);
   }
 }
+
+/**
+ * An async recognizer (NER service) failed or timed out while
+ * `recognizerFailure` is 'block'. Nothing was sent upstream.
+ */
+export class VelaRecognizerError extends VelaError {
+  readonly cause: unknown;
+  constructor(cause: unknown) {
+    const why = cause instanceof Error ? cause.message : String(cause);
+    super(`PII recognizer unavailable; request not forwarded (${why})`, 503);
+    this.cause = cause;
+  }
+}
+
+/**
+ * mask() was called on text that has not been through prepare() while async
+ * recognizers are configured. Use maskAsync() / the *Async helpers, or call
+ * `await session.prepare(texts)` first.
+ */
+export class VelaNotPreparedError extends VelaError {
+  constructor() {
+    super(
+      'Async recognizers are configured: use vela.maskAsync(), the *Async request helpers, or await session.prepare() before mask()',
+      500,
+    );
+  }
+}
