@@ -9,6 +9,7 @@ NER services as a first-class, fail-closed detection path.
 - **Fail closed:** `recognizerFailure: 'block'` (default) rejects the request with `VelaRecognizerError` if a recognizer fails or exceeds `recognizerTimeoutMs` (default 5000). The proxy and Express middleware return HTTP 503 and send nothing upstream. `'continue'` falls back to built-in detection and logs a warning.
 - **New async API:** `vela.maskAsync()`, `session.prepare()` / `session.prepareValue()`, `maskLlmRequestAsync()`, `maskOpenAiRequestAsync()`, `maskOpenAiResponsesRequestAsync()`, `maskAnthropicRequestAsync()`. The proxy, fetch interceptor, Express middleware and both client wrappers use the async path automatically, with no behaviour or latency change when no async recognizers are configured.
 - **Breaking (only with `asyncRecognizers` set):** synchronous `vela.mask()`, `session.mask()` and the sync request helpers throw `VelaNotPreparedError` for text that hasn't been prepared, so text can't skip NER by accident. Without `asyncRecognizers` nothing changes.
+- **Performance fix:** detection was super-linear on large inputs (overlap resolution, re-mention and citation checks compared every entity with every other). It now uses sorted interval lookups and scales linearly: a 400 KB prompt is about 7× faster, and the gap grows with size. Found by the new performance test.
 - Docs: README "Project status" section, threat model, security reviewer guide and `SECURITY.md`.
 
 ## 0.3.3

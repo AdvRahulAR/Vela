@@ -398,8 +398,50 @@ const BARE_VS_ANCHORED = new RegExp(
   'gi',
 );
 
-function citationZones(text: string): Array<[number, number]> {
-  if (!/\b(?:v|vs|versus)\.?[ ]/i.test(text)) return [];
+/**
+ * Disjoint intervals kept sorted by start, so overlap queries are a binary
+ * search instead of a scan. Keeps detection linear on large documents.
+ */
+class IntervalSet<T extends { start: number; end: number }> {
+  readonly items: T[] = [];
+
+  /** Index range [lo, hi) of the intervals overlapping [start, end). */
+  range(start: number, end: number): [number, number] {
+    // Disjoint + sorted by start => ends are sorted too: first item ending after `start`.
+    let lo = 0;
+    let hi = this.items.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if ((this.items[mid] as T).end > start) hi = mid;
+      else lo = mid + 1;
+    }
+    let j = lo;
+    while (j < this.items.length && (this.items[j] as T).start < end) j++;
+    return [lo, j];
+  }
+
+  overlaps(start: number, end: number): boolean {
+    const [lo, hi] = this.range(start, end);
+    return hi > lo;
+  }
+
+  /** Insert an interval that overlaps nothing, or replace items [lo, hi) with it. */
+  put(item: T, lo: number, hi = lo): void {
+    this.items.splice(lo, hi - lo, item);
+  }
+
+  add(item: T): void {
+    const [lo, hi] = this.range(item.start, item.end);
+    if (hi === lo) this.put(item, lo);
+  }
+}
+
+type Zone = { start: number; end: number };
+
+/** Citation zones, merged into sorted, disjoint intervals. */
+function citationZones(text: string): IntervalSet<Zone> {
+  const set = new IntervalSet<Zone>();
+  if (!/\b(?:v|vs|versus)\.?[ ]/i.test(text)) return set;
   const zones: Array<[number, number]> = [];
   for (const re of [CITATION_ZONE, BARE_VS_ANCHORED]) {
     re.lastIndex = 0;
@@ -412,14 +454,20 @@ function citationZones(text: string): Array<[number, number]> {
       zones.push([m.index, m.index + m[0].length]);
     }
   }
-  return zones;
+  zones.sort((a, b) => a[0] - b[0]);
+  for (const [s, e] of zones) {
+    const last = set.items[set.items.length - 1];
+    if (last && s <= last.end) last.end = Math.max(last.end, e);
+    else set.items.push({ start: s, end: e });
+  }
+  return set;
 }
 
 const CITATION_EXEMPT_TYPES: ReadonlySet<EntityType> = new Set(['PERSON', 'ORG']);
 
-function outsideZones(e: DetectedEntity, zones: Array<[number, number]>): boolean {
+function outsideZones(e: DetectedEntity, zones: IntervalSet<Zone>): boolean {
   if (!CITATION_EXEMPT_TYPES.has(e.type)) return true;
-  return !zones.some(([s, en]) => e.start < en && e.end > s);
+  return !zones.overlaps(e.start, e.end);
 }
 
 export interface DetectOptions {
@@ -498,17 +546,19 @@ function resolveOverlaps(found: DetectedEntity[]): DetectedEntity[] {
     if (d !== 0) return d;
     return a.start - b.start;
   });
-  let selected: DetectedEntity[] = [];
+  const selected = new IntervalSet<DetectedEntity>();
   for (const c of candidates) {
-    const overlapping = selected.filter((s) => c.start < s.end && c.end > s.start);
-    if (overlapping.length === 0) {
-      selected.push(c);
-    } else if (CONTAINER_TYPES.has(c.type) && overlapping.every((s) => s.start >= c.start && s.end <= c.end)) {
-      selected = selected.filter((s) => !overlapping.includes(s));
-      selected.push(c);
+    const [lo, hi] = selected.range(c.start, c.end);
+    if (hi === lo) {
+      selected.put(c, lo);
+    } else if (
+      CONTAINER_TYPES.has(c.type) &&
+      selected.items.slice(lo, hi).every((s) => s.start >= c.start && s.end <= c.end)
+    ) {
+      selected.put(c, lo, hi);
     }
   }
-  return selected.sort((a, b) => a.start - b.start);
+  return selected.items;
 }
 
 /**
@@ -571,8 +621,8 @@ export function detectPii(text: string, options?: DetectOptions | string[]): Det
 
   // Party names inside reported court citations are public record: drop them
   // before they can seed re-mentions elsewhere in the text.
-  const zones = opts.maskCitationParties ? [] : citationZones(full);
-  if (zones.length) selected = selected.filter((e) => outsideZones(e, zones));
+  const zones = opts.maskCitationParties ? new IntervalSet<Zone>() : citationZones(full);
+  if (zones.items.length) selected = selected.filter((e) => outsideZones(e, zones));
 
   // Re-mentions of known name components ("Rahul Sharma … Mr. Sharma … SHARMA … sharma").
   if (opts.detectNames !== false) {
@@ -596,18 +646,24 @@ export function detectPii(text: string, options?: DetectOptions | string[]): Det
       const patterns = [new RegExp(`(?<![\\w@])(?:${alt(cased)})(?![\\w@])`, 'g')];
       // Lowercase variants use the stricter code/path-aware boundaries of LOWER_WORD.
       if (lower.size) patterns.push(new RegExp(`(?<![\\w@./_-])(?:${alt(lower)})${LOWER_END}`, 'g'));
-      const extra: DetectedEntity[] = [];
+      // `selected` is sorted and disjoint, so it can seed the interval set directly.
+      const occupied = new IntervalSet<DetectedEntity>();
+      occupied.items.push(...selected);
+      let added = false;
       for (const re of patterns) {
         let m: RegExpExecArray | null;
         while ((m = re.exec(full)) !== null) {
           const s = m.index;
           const e = s + m[0].length;
           const ent: DetectedEntity = { type: 'PERSON', start: s, end: e, value: m[0], confidence: 0.8 };
-          const taken = [...selected, ...extra].some((x) => s < x.end && e > x.start);
-          if (!taken && outsideZones(ent, zones)) extra.push(ent);
+          const [lo, hi] = occupied.range(s, e);
+          if (hi === lo && outsideZones(ent, zones)) {
+            occupied.put(ent, lo);
+            added = true;
+          }
         }
       }
-      if (extra.length) selected = [...selected, ...extra].sort((a, b) => a.start - b.start);
+      if (added) selected = occupied.items;
     }
   }
 
