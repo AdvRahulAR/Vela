@@ -12,9 +12,7 @@ NER services as a first-class, fail-closed detection path.
 - **Performance fix:** detection was super-linear on large inputs (overlap resolution, re-mention and citation checks compared every entity with every other). It now uses sorted interval lookups and scales linearly: a 400 KB prompt is about 7× faster, and the gap grows with size. Found by the new performance test.
 - Docs: README "Project status" section, threat model, security reviewer guide and `SECURITY.md`.
 
-## 0.3.3
-
-Reliability release: CI, deeper tests and the fixes they found. No API changes except the new `maxInputChars` option and error classes.
+### Reliability (CI, deeper tests and the fixes they found)
 
 - **Fix:** in `maskValue`, a placeholder-shaped literal in a later field (e.g. `[EMAIL_3]`) could collide with a placeholder issued for an earlier field, so restoration turned the literal into a real value. All leaves are now scanned before masking. Found by the new property-based tests.
 - **Fix:** all-lowercase names at the end of a sentence ("I met deepa.") were missed.
