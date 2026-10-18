@@ -4,7 +4,8 @@ import { detectPii, nameComponents, type DetectOptions } from './detector.js';
 import type { FpeMasker } from './fpe.js';
 import { personComponents } from './names.js';
 import { VelaInputTooLargeError, VelaNotPreparedError, VelaRecognizerError } from './errors.js';
-import { Restorer, type RestoreOptions, type StreamRestorer } from './matcher.js';
+import { Restorer, type RestoreField, type RestoreOptions, type StreamRestorer } from './matcher.js';
+import { fieldForKey } from './streaming.js';
 import type {
   AsyncEntityRecognizer,
   DetectedEntity,
@@ -14,6 +15,16 @@ import type {
   Replacement,
   SessionOptions,
 } from '../types.js';
+
+/**
+ * Keys the residual pass never touches: identifiers, enums and opaque blobs
+ * (base64 data, thinking signatures) that must reach the provider unchanged.
+ */
+const RESIDUAL_SKIP_KEYS = new Set([
+  'model', 'role', 'type', 'id', 'object', 'stream', 'tool_choice', 'signature', 'data', 'b64_json',
+  'image_url', 'file_data', 'file_id', 'encrypted_content', 'previous_response_id', 'tool_call_id',
+  'tool_use_id', 'call_id', 'media_type', 'encoding_format', 'service_tier', 'reasoning_effort',
+]);
 
 /** JSON keys whose string values are themselves JSON documents (tool-call arguments). */
 const JSON_STRING_KEYS = new Set(['arguments', 'partial_json']);
@@ -31,7 +42,30 @@ export interface SessionEngine {
   recognizerTimeoutMs: number;
   /** Called when a recognizer fails and recognizerFailure is 'continue'. */
   onRecognizerFailure?: (err: unknown) => void;
+  /** Per-field restore policy ('restore' unless set). */
+  restore?: RestorePolicy;
 }
+
+/** Whether placeholders in each part of a response are restored or left as placeholders. */
+export interface RestorePolicy {
+  /** Content text. Default 'restore'. */
+  content?: 'restore' | 'placeholders';
+  /**
+   * Tool-call arguments. 'placeholders' stops a prompt-injected model from
+   * smuggling a real value into a tool call (see THREAT_MODEL.md). Default 'restore'.
+   */
+  toolArguments?: 'restore' | 'placeholders';
+  /** Model reasoning / thinking text. Default 'restore'. */
+  thinking?: 'restore' | 'placeholders';
+}
+
+/** Placeholders found in responses, per field: restored, or kept by the restore policy. */
+export interface RestoreReport {
+  restored: Record<RestoreField, number>;
+  kept: Record<RestoreField, number>;
+}
+
+const POLICY_KEY: Record<RestoreField, keyof RestorePolicy> = { content: 'content', tool_args: 'toolArguments', thinking: 'thinking' };
 
 /** Strings an NER service can't find anything in: skip the round trip. */
 const isTrivial = (s: string): boolean => s.length < 3 || !/[\p{L}\p{N}]/u.test(s);
@@ -72,6 +106,12 @@ export class MaskSession {
   /** Spans from async recognizers, per exact text, filled by prepare(). */
   private readonly prepared = new Map<string, RecognizedSpan[]>();
   private restorer: Restorer | null = null;
+  /** NER status for this session: whether async recognizers ran, and whether one failed. */
+  nerStatus: 'none' | 'ok' | 'failed_continued' = 'none';
+  private readonly report: RestoreReport = {
+    restored: { content: 0, tool_args: 0, thinking: 0 },
+    kept: { content: 0, tool_args: 0, thinking: 0 },
+  };
 
   constructor(
     private readonly engine: SessionEngine,
@@ -152,8 +192,10 @@ export class MaskSession {
       } catch (err) {
         if (this.engine.recognizerFailure === 'block') throw new VelaRecognizerError(err);
         this.engine.onRecognizerFailure?.(err);
+        this.nerStatus = 'failed_continued';
       }
     }
+    if (this.nerStatus === 'none') this.nerStatus = 'ok';
     todo.forEach((t, i) => this.prepared.set(t, merged[i] as RecognizedSpan[]));
   }
 
@@ -197,15 +239,41 @@ export class MaskSession {
 
   /** Mask one string. */
   mask(text: string, prefix?: string): string {
+    return this.maskText(text, prefix, false);
+  }
+
+  /**
+   * Fail-closed backstop run over a request after the format-aware walk:
+   * masks any detected value in string leaves the walk didn't cover (unknown
+   * fields such as `user`, `metadata`, `suffix`, message `name`). Values this
+   * session already masked are left alone, so nothing is masked twice.
+   */
+  maskResidual<T>(value: T, key?: string): T {
+    if (key && RESIDUAL_SKIP_KEYS.has(key)) return value;
+    if (typeof value === 'string') return this.maskText(value, key ? `${humanizeKey(key)}: ` : undefined, true) as unknown as T;
+    if (Array.isArray(value)) return value.map((v) => this.maskResidual(v, key)) as unknown as T;
+    if (value && typeof value === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value)) out[k] = this.maskResidual(v, k);
+      return out as T;
+    }
+    return value;
+  }
+
+  private maskText(text: string, prefix: string | undefined, residual: boolean): string {
     if (!text) return text;
     this.checkSize(text);
     this.reserveLiteralTokens(text);
-    const entities = detectPii(text, {
+    // A residual pass sees already-masked text, which was never prepared; use NER spans only if they exist.
+    const pre = residual ? (this.prepared.has(text) ? { precomputed: this.prepared.get(text) as RecognizedSpan[] } : {}) : this.precomputedFor(text);
+    let entities = detectPii(text, {
       ...this.engine.detect,
       knownNames: this.knownNames,
       ...(prefix ? { prefix } : {}),
-      ...this.precomputedFor(text),
+      ...pre,
     });
+    if (residual) entities = entities.filter((e) => !this.isMaskedOutput(e.value));
+    if (residual && entities.length === 0) return text;
     for (const n of nameComponents(entities)) this.knownNames.add(n);
     this.registerFullNames(entities, text);
 
@@ -273,27 +341,63 @@ export class MaskSession {
     }
   }
 
-  /** Restore originals in a complete text. */
+  /** Restore originals in a complete text (a content field unless `opts.field` says otherwise). */
   unmask(text: string, opts?: RestoreOptions): { text: string; restored: number } {
-    return this.getRestorer().restore(text, opts);
+    return this.getRestorer().restore(text, this.restoreOptions(opts));
   }
 
-  /** Restore originals in every string of a JSON-like value (JSON-string fields are escaped correctly). */
-  unmaskValue<T>(value: T, key?: string): T {
+  /**
+   * Restore originals in every string of a JSON-like value. JSON-string fields
+   * are escaped correctly, and each string is attributed to a field (content,
+   * tool arguments, thinking) for the restore policy.
+   */
+  unmaskValue<T>(value: T, key?: string, field?: RestoreField): T {
+    const f = fieldForKey(key, field);
     if (typeof value === 'string') {
-      return this.getRestorer().restore(value, { json: JSON_STRING_KEYS.has(key ?? '') }).text as unknown as T;
+      return this.getRestorer().restore(value, this.restoreOptions({ json: JSON_STRING_KEYS.has(key ?? ''), field: f ?? 'content' }))
+        .text as unknown as T;
     }
-    if (Array.isArray(value)) return value.map((v) => this.unmaskValue(v, key)) as unknown as T;
+    if (Array.isArray(value)) return value.map((v) => this.unmaskValue(v, key, f)) as unknown as T;
     if (value && typeof value === 'object') {
       const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(value)) out[k] = this.unmaskValue(v, k);
+      for (const [k, v] of Object.entries(value)) out[k] = this.unmaskValue(v, k, f);
       return out as T;
     }
     return value;
   }
 
   createStreamDeMasker(opts?: RestoreOptions): StreamRestorer {
-    return this.getRestorer().createStream(opts);
+    return this.getRestorer().createStream(this.restoreOptions(opts));
+  }
+
+  /** Value-free counts for audit events: entity occurrences by type, unique values by masking method. */
+  stats(): { entities: Record<string, number>; actions: Record<string, number> } {
+    const entities: Record<string, number> = {};
+    for (const e of this.allEntities) entities[e.type] = (entities[e.type] ?? 0) + 1;
+    const actions: Record<string, number> = {};
+    for (const r of this.byMasked.values()) actions[r.method] = (actions[r.method] ?? 0) + 1;
+    return { entities, actions };
+  }
+
+  /** Placeholders found in responses so far: how many were restored or kept, per field. */
+  get restoreReport(): RestoreReport {
+    return { restored: { ...this.report.restored }, kept: { ...this.report.kept } };
+  }
+
+  /** Apply the restore policy for the field and count what is restored or kept. */
+  private restoreOptions(opts: RestoreOptions = {}): RestoreOptions {
+    const field = opts.field ?? 'content';
+    const keep = opts.keep ?? this.engine.restore?.[POLICY_KEY[field]] === 'placeholders';
+    const bucket = keep ? this.report.kept : this.report.restored;
+    return {
+      ...opts,
+      field,
+      keep,
+      onMatch: (rep) => {
+        bucket[field]++;
+        opts.onMatch?.(rep);
+      },
+    };
   }
 
   /** Snapshot as a (backwards-compatible) MaskResult. */
@@ -366,6 +470,13 @@ export class MaskSession {
     } while (this.byMasked.has(token) || this.reserved.has(token) || text.includes(token));
     this.counters.set(base, n);
     return token;
+  }
+
+  /** True if `v` is, contains or is part of something this session issued (ciphertext or placeholder). */
+  private isMaskedOutput(v: string): boolean {
+    if (/\[[A-Z][A-Z0-9_]*_\d+\]/.test(v)) return true;
+    for (const m of this.byMasked.keys()) if (m.includes(v) || v.includes(m)) return true;
+    return false;
   }
 
   private reserveLiteralTokens(text: string): void {

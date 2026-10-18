@@ -6,13 +6,22 @@ export {
   VelaRecognizerError,
   VelaNotPreparedError,
   VelaRouteBlockedError,
+  VelaAuditError,
 } from './core/errors.js';
-export { MaskSession } from './core/session.js';
+export {
+  consoleSink,
+  jsonlFileSink,
+  verifyAuditChain,
+  canonicalJson,
+  type AuditEvent,
+  type AuditSink,
+} from './core/audit.js';
+export { MaskSession, type RestorePolicy, type RestoreReport } from './core/session.js';
 export { FF1 } from './core/ff1.js';
 export { FpeMasker, STRUCTURED_TYPES } from './core/fpe.js';
 export { TokenMasker } from './core/tokens.js';
 export { QuantumKeyManager } from './core/quantum.js';
-export { Restorer, StreamRestorer, replacementsFrom } from './core/matcher.js';
+export { Restorer, StreamRestorer, replacementsFrom, type RestoreField, type RestoreOptions } from './core/matcher.js';
 export {
   TokenStreamDeMasker,
   createSseDeMasker,
@@ -58,7 +67,7 @@ export {
   type RouteClass,
 } from './integrations/formats.js';
 export { presidioRecognizer, codePointToUtf16Index, type PresidioRecognizerOptions } from './integrations/presidio.js';
-export { forwardLlmRequest, forwardFieldsRequest } from './integrations/gateway.js';
+export { forwardLlmRequest, forwardFieldsRequest, REQUEST_ID_HEADER } from './integrations/gateway.js';
 export { createFetchInterceptor } from './integrations/fetch.js';
 export { createExpressMiddleware } from './integrations/express.js';
 export { runProxy } from './integrations/proxy.js';

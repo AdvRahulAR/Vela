@@ -1,13 +1,27 @@
-import { Restorer, replacementsFrom, type RestoreOptions, type StreamRestorer } from './matcher.js';
+import { Restorer, replacementsFrom, type RestoreField, type RestoreOptions, type StreamRestorer } from './matcher.js';
 import type { LlmApiFormat, MaskResult, StreamDeMasker } from '../types.js';
 
 /** Anything that can restore values: a MaskSession, or a set of legacy MaskResults. */
 export interface RestoreSource {
   createStreamDeMasker(opts?: RestoreOptions): StreamRestorer;
-  unmaskValue<T>(value: T, key?: string): T;
+  unmaskValue<T>(value: T, key?: string, field?: RestoreField): T;
 }
 
 const JSON_STRING_KEYS = new Set(['arguments', 'partial_json']);
+const TOOL_ARG_KEYS = new Set(['arguments', 'partial_json', 'input']);
+const THINKING_KEYS = new Set(['thinking', 'reasoning_content', 'reasoning', 'summary']);
+
+/**
+ * The response field a JSON key starts: tool-call arguments (`arguments`,
+ * `partial_json`, Anthropic `tool_use.input`), model reasoning, or inherited
+ * from the parent (content at the top level).
+ */
+export function fieldForKey(key: string | undefined, parent?: RestoreField): RestoreField | undefined {
+  if (parent && parent !== 'content') return parent;
+  if (key && TOOL_ARG_KEYS.has(key)) return 'tool_args';
+  if (key && THINKING_KEYS.has(key)) return 'thinking';
+  return parent;
+}
 
 /** Adapter turning legacy MaskResult(s) into a RestoreSource. */
 export class ResultRestoreSource implements RestoreSource {
@@ -58,10 +72,10 @@ type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-ex
 class Lanes {
   private readonly lanes = new Map<string, StreamRestorer>();
   constructor(private readonly src: RestoreSource) {}
-  get(key: string, json = false): StreamRestorer {
+  get(key: string, json = false, field: RestoreField = json ? 'tool_args' : 'content'): StreamRestorer {
     let l = this.lanes.get(key);
     if (!l) {
-      l = this.src.createStreamDeMasker({ json });
+      l = this.src.createStreamDeMasker({ json, field });
       this.lanes.set(key, l);
     }
     return l;
@@ -105,7 +119,10 @@ export class OpenAiChatStreamUnmasker implements EventUnmasker {
       const delta: Json | undefined = choice.delta ? { ...choice.delta } : undefined;
       if (delta) {
         for (const field of ['content', 'refusal', 'reasoning_content']) {
-          if (typeof delta[field] === 'string') delta[field] = this.lanes.get(`${idx}|${field}`).feed(delta[field]);
+          if (typeof delta[field] === 'string') {
+            const kind = field === 'reasoning_content' ? 'thinking' : 'content';
+            delta[field] = this.lanes.get(`${idx}|${field}`, false, kind).feed(delta[field]);
+          }
         }
         if (Array.isArray(delta.tool_calls)) {
           delta.tool_calls = delta.tool_calls.map((tc: Json, j: number) => {
@@ -184,7 +201,8 @@ export class AnthropicStreamUnmasker implements EventUnmasker {
       const field = ANTHROPIC_DELTA_FIELDS[ev.delta.type as string];
       if (field && typeof ev.delta[field] === 'string') {
         this.deltaType.set(ev.index, ev.delta.type);
-        const lane = this.lanes.get(String(ev.index), field === 'partial_json');
+        const kind = field === 'partial_json' ? 'tool_args' : field === 'thinking' ? 'thinking' : 'content';
+        const lane = this.lanes.get(String(ev.index), field === 'partial_json', kind);
         return [{ ...ev, delta: { ...ev.delta, [field]: lane.feed(ev.delta[field]) } }];
       }
       return [this.src.unmaskValue(ev)];
@@ -224,7 +242,8 @@ export class ResponsesStreamUnmasker implements EventUnmasker {
       const base = ev.type.slice(0, -'.delta'.length);
       const key = this.key(base, ev);
       this.templates.set(key, ev);
-      return [{ ...ev, delta: this.lanes.get(key, base.includes('arguments')).feed(ev.delta) }];
+      const kind = base.includes('arguments') ? 'tool_args' : base.includes('reasoning') ? 'thinking' : 'content';
+      return [{ ...ev, delta: this.lanes.get(key, base.includes('arguments'), kind).feed(ev.delta) }];
     }
     if (ev.type.endsWith('.done')) {
       const base = ev.type.slice(0, -'.done'.length);

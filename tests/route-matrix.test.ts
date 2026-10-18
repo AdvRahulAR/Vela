@@ -199,3 +199,86 @@ describe('client wrapper method matrix (leak oracle)', async () => {
     for (const p of blocked) assert.throws(() => at(p)(structuredClone(anthropic)), VelaRouteBlockedError, p);
   });
 });
+
+describe('review findings on 0.4.1 (each one leaked before its fix)', () => {
+  const vela = new Vela();
+  const json = (o: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(o) });
+
+  async function withProviderFetch(fn: (f: typeof fetch, up: MockUpstream) => Promise<void>, opts = {}): Promise<void> {
+    const up = await startUpstream();
+    const real = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const u = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+      return real(up.url + u.pathname + u.search, input instanceof Request ? input : init);
+    }) as typeof fetch;
+    try {
+      await fn(createFetchInterceptor(vela, opts), up);
+    } finally {
+      globalThis.fetch = real;
+      await up.close();
+    }
+  }
+
+  it('fetch: a body on DELETE (or a POST Request re-sent as DELETE) is dropped', async () => {
+    await withProviderFetch(async (f, up) => {
+      await f('https://api.openai.com/v1/chat/completions', { method: 'DELETE', body: JSON.stringify(chat) });
+      await f(new Request('https://api.openai.com/v1/files/x', { method: 'POST', body: SENTINEL_TEXT }), { method: 'DELETE' });
+      assert.equal(up.seen.length, 2);
+      assertNoSentinel(up.dump());
+    });
+  });
+
+  it('percent-encoded paths are blocked', () => {
+    assert.equal(classifyRoute('POST', '/v1/%74hreads/t1/messages').kind, 'blocked');
+  });
+
+  it('unknown text fields are masked by the residual pass', async () => {
+    await withProviderFetch(async (f, up) => {
+      await f('https://api.openai.com/v1/completions', json({ model: 'm', prompt: 'x', suffix: SENTINEL_TEXT }));
+      await f('https://api.openai.com/v1/embeddings', json({ model: 'm', input: [[SENTINEL_TEXT]] }));
+      await f('https://api.openai.com/v1/chat/completions', json({ ...chat, user: SENTINEL_TEXT, metadata: { note: SENTINEL_TEXT }, messages: [{ role: 'user', name: SENTINEL_TEXT, content: 'hi' }] }));
+      assertNoSentinel(up.dump());
+      const sent = JSON.parse(up.seen[2]?.body ?? '{}');
+      assert.equal(sent.model, 'm', 'structural fields are untouched');
+    });
+  });
+
+  it('more provider hosts get the route rules; Ollama native routes are blocked', async () => {
+    await withProviderFetch(async (f, up) => {
+      await f('https://x.services.ai.azure.com/openai/deployments/d/embeddings', json({ input: SENTINEL_TEXT }));
+      assertNoSentinel(up.dump());
+      await assert.rejects(f('https://api.openai.com./v1/batches', json({ input_file_id: 'f' })), VelaRouteBlockedError);
+    });
+    await withProviderFetch(async (f) => {
+      await assert.rejects(f('http://localhost:11434/api/chat', json(chat)), VelaRouteBlockedError);
+    }, { providers: ['ollama'] });
+  });
+
+  it('cancel endpoints still work and send no body', async () => {
+    const up = await startUpstream();
+    const proxy = runProxy(vela, { port: 0, upstream: up.url });
+    try {
+      const base = await baseUrlOf(proxy);
+      const r = await fetch(`${base}/v1/responses/resp_1/cancel`, json({ note: SENTINEL_TEXT }));
+      assert.equal(r.status, 200);
+      assert.equal(up.seen[0]?.body, '');
+    } finally {
+      await new Promise((r) => proxy.close(r));
+      await up.close();
+    }
+  });
+
+  it('SDK wrappers block every method they do not know', async () => {
+    const { wrapAnthropicClient, wrapOpenAiClient } = await import('../src/index.js');
+    const sent: unknown[] = [];
+    const rec = async (p: unknown) => sent.push(p);
+    const a = wrapAnthropicClient({ messages: { create: rec }, completions: { create: rec }, post: rec, models: { list: rec } } as never, vela) as never as Record<string, Record<string, (p: unknown) => unknown>>;
+    await a.completions?.create?.({ model: 'm', prompt: `\n\nHuman: ${SENTINEL_TEXT}\n\nAssistant:` });
+    assertNoSentinel(JSON.stringify(sent), 'Anthropic SDK');
+    assert.throws(() => (a as never as { post: (p: string, o: unknown) => unknown }).post('/v1/messages', { body: chat }), VelaRouteBlockedError);
+    await a.models?.list?.({});
+    const o = wrapOpenAiClient({ chat: { completions: { create: rec } }, beta: { threads: { runs: { stream: rec, createAndStream: rec } } } } as never, vela) as never as { beta: { threads: { runs: Record<string, () => unknown> } } };
+    assert.throws(() => o.beta.threads.runs.stream?.(), VelaRouteBlockedError);
+    assert.throws(() => o.beta.threads.runs.createAndStream?.(), VelaRouteBlockedError);
+  });
+});

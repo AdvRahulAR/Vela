@@ -18,7 +18,7 @@ export function detectApiFormat(pathname: string): LlmApiFormat | null {
  * How Vela handles a request to a provider route:
  * - `llm`: a chat/messages/responses request, masked and restored;
  * - `fields`: top-level text fields (`input`, `prompt`) are masked; the JSON response is restored;
- * - `safe`: a method that carries no body (GET, HEAD, OPTIONS, DELETE), forwarded as-is;
+ * - `safe`: a method that carries no body (GET, HEAD, OPTIONS, DELETE, POST …/cancel), forwarded with any body dropped;
  * - `blocked`: anything else. Vela can't mask it, so it is not sent (fail closed).
  */
 export type RouteClass =
@@ -31,14 +31,22 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'DELETE']);
 
 export function classifyRoute(method: string, pathname: string): RouteClass {
   const m = method.toUpperCase();
+  // Encoded paths could classify differently from how the provider routes them.
+  if (pathname.includes('%')) return { kind: 'blocked', reason: 'percent-encoded paths are not accepted' };
   if (SAFE_METHODS.has(m)) return { kind: 'safe' };
   const p = pathname.replace(/\/+$/, '');
+  // Cancel endpoints take no body (the body is dropped when forwarding).
+  if (m === 'POST' && /\/cancel$/.test(p)) return { kind: 'safe' };
   if (m === 'POST') {
     const format = detectApiFormat(p);
     if (format) return { kind: 'llm', format };
     if (/\/(embeddings|moderations)$/.test(p)) return { kind: 'fields', fields: ['input'], allowStream: false };
     // Legacy text completions; streaming them is not supported, so it is rejected.
-    if (/\/completions$/.test(p)) return { kind: 'fields', fields: ['prompt'], allowStream: false };
+    if (/\/completions$/.test(p)) return { kind: 'fields', fields: ['prompt', 'suffix'], allowStream: false };
+    // Ollama's native API returns NDJSON, which Vela can't restore; its /v1 OpenAI-compatible routes work.
+    if (/^\/api\/(chat|generate|embed|embeddings)$/.test(p)) {
+      return { kind: 'blocked', reason: "use Ollama's OpenAI-compatible /v1 endpoints" };
+    }
     if (/\/batches(\/|$)/.test(p)) return { kind: 'blocked', reason: 'batch results arrive later and cannot be restored' };
     if (/\/(files|uploads)(\/|$)/.test(p)) return { kind: 'blocked', reason: 'file uploads cannot be masked' };
     if (/\/audio(\/|$)/.test(p)) return { kind: 'blocked', reason: 'audio cannot be masked' };
@@ -178,11 +186,13 @@ export function maskLlmRequest<T extends object>(session: MaskSession, format: L
     else session.learnValue(v);
     return v;
   });
-  return walk(format, body as Json, (v, kind) => {
+  const walked = walk(format, body as Json, (v, kind) => {
     if (kind === 'text' && typeof v === 'string') return session.mask(v);
     if (kind === 'json' && typeof v === 'string') return session.maskJsonString(v);
     return session.maskValue(v);
-  }) as T;
+  });
+  // Backstop: fields the walk doesn't know (user, metadata, message names…) are masked too.
+  return session.maskResidual(walked) as T;
 }
 
 /**
@@ -194,18 +204,25 @@ export async function maskLlmRequestAsync<T extends object>(session: MaskSession
   return maskLlmRequest(session, format, body);
 }
 
+function maskNested(v: unknown, mask: (s: string) => string): unknown {
+  if (typeof v === 'string') return mask(v);
+  if (Array.isArray(v)) return v.map((x) => maskNested(x, mask));
+  if (v && typeof v === 'object' && typeof (v as Json).text === 'string') return { ...(v as Json), text: mask((v as Json).text) };
+  return v;
+}
+
 /**
  * Mask top-level text fields (`input`, `prompt`) of a `fields` route. Each
  * field may be a string or an array of strings; other values are left alone.
  */
 export async function maskFieldsAsync<T extends Record<string, unknown>>(session: MaskSession, fields: string[], body: T): Promise<T> {
   const out: Record<string, unknown> = { ...body };
-  await session.prepareValue(fields.map((f) => body[f]));
+  await session.prepareValue(body);
   for (const f of fields) {
     const v = out[f];
     if (typeof v === 'string') out[f] = session.mask(v);
-    // Arrays may hold strings, token ids or multimodal parts ({ type: 'text', text }).
-    else if (Array.isArray(v)) out[f] = mapTextParts(v, (x) => session.mask(x as string));
+    // Arrays may hold strings, token ids, nested arrays or multimodal parts ({ type: 'text', text }).
+    else if (Array.isArray(v)) out[f] = maskNested(v, (x) => session.mask(x));
   }
-  return out as T;
+  return session.maskResidual(out) as T;
 }

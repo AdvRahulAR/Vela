@@ -57,3 +57,12 @@ export class VelaRouteBlockedError extends VelaError {
     this.route = route;
   }
 }
+
+/** The audit sink failed before the request was forwarded. Nothing was sent. */
+export class VelaAuditError extends VelaError {
+  readonly cause: unknown;
+  constructor(cause: unknown) {
+    super('Audit log unavailable; request not forwarded', 503);
+    this.cause = cause;
+  }
+}

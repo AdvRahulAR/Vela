@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased (0.5.0)
+
+- **Audit events** (`audit` option, `jsonlFileSink`, `consoleSink`, `verifyAuditChain`):
+  - Each request records a value-free `vela.request` event before anything is sent, and a `vela.response` event when the response completes. Blocked requests record `vela.blocked`, failed ones `vela.error`.
+  - Events carry route, model, entity counts by type, actions, NER status, restore counts per field, key id and latency, and never values.
+  - `jsonlFileSink` hash-chains events so edits and deletions are detectable.
+  - If the sink fails before forwarding, the request is rejected (HTTP 503, `VelaAuditError`).
+  - Responses carry `x-vela-request-id`.
+- **Restore policy** (`restore: { toolArguments: 'placeholders' }`): placeholders in tool-call arguments (or thinking, or content) can be left unrestored, so a prompt-injected model can't put a real value into an automatically executed tool call. `session.restoreReport` counts restored and kept placeholders per field.
+- A caller-chosen session id is bound to the authenticated tenant when there is one.
+
 ## 0.4.1
 
 **Security fix: unmasked requests through unrecognised routes.** Found by the compliance audit (`docs/COMPLIANCE_AUDIT.md`, F1 and F2). Upgrade if you use the proxy, the fetch interceptor or a client wrapper.
@@ -15,6 +26,15 @@
     - OpenAI `chat.completions.parse`, `responses.parse`, `responses.inputTokens.count`, `completions.create`, `embeddings.create` and `moderations.create`;
     - Anthropic `messages.countTokens` and `beta.messages.create`/`countTokens`.
   - Now throw `VelaRouteBlockedError`: methods Vela can't mask (`stream()` helpers, batches, file uploads, audio, image generation, Assistants threads).
+- **Residual masking backstop:** after the format-aware walk, any detected value left in a field Vela didn't know was text is masked as well. That covers OpenAI `user`, `metadata`, message `name`, legacy `suffix`, nested embedding arrays, and the bodies of future API fields. Identifiers and opaque blobs (`model`, `id`, `type`, `signature`, base64 `data`…) are never touched.
+- **Client wrappers are now allowlists:** a method that is neither wrapped nor read-only (`list`, `retrieve`, `del`, `cancel`…) throws `VelaRouteBlockedError`. This covers SDK helpers Vela doesn't know, Anthropic legacy `completions.create` (now masked) and raw `client.post`.
+- More fail-closed route rules:
+  - percent-encoded paths are blocked;
+  - Ollama's native `/api/chat|generate|embed` routes are blocked when Ollama is listed as a provider (use its `/v1` routes);
+  - the fetch interceptor applies provider rules to hosts listed in `providers`, Azure AI Foundry and Cognitive Services hosts, and hostnames with a trailing dot;
+  - bodies sent with DELETE, OPTIONS or `…/cancel` to a provider are dropped;
+  - `POST …/cancel` without a body keeps working.
+- Proxy: requests carrying `anthropic-version` (e.g. `GET /v1/models` from the Anthropic SDK) go to api.anthropic.com when no `--upstream` is set, so an Anthropic key is no longer sent to OpenAI.
 - New exports: `classifyRoute`, `maskFieldsAsync`, `forwardFieldsRequest`, `VelaRouteBlockedError`.
 - Docs: corpus results are stated as counts, not recall percentages; threat model and reviewer guide updated (new fail-open checklist).
 

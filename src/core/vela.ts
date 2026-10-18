@@ -4,6 +4,7 @@ import { FpeMasker } from './fpe.js';
 import { MaskSession, type SessionEngine } from './session.js';
 import { Restorer, replacementsFrom, type RestoreOptions, type StreamRestorer } from './matcher.js';
 import { Logger } from '../utils/logger.js';
+import type { AuditSink } from './audit.js';
 import type { MaskResult, SessionOptions, UnmaskResult, VelaConfig } from '../types.js';
 
 /**
@@ -18,6 +19,10 @@ import type { MaskResult, SessionOptions, UnmaskResult, VelaConfig } from '../ty
 export class Vela {
   private readonly engine: SessionEngine;
   private readonly logger: Logger;
+  /** Where the integrations send audit events (`VelaConfig.audit`). */
+  readonly audit: AuditSink | undefined;
+  /** Static fields copied into every audit event (policy id and hash, key id). */
+  readonly auditContext: { policy_id?: string; policy_hash?: string; key_id?: string };
 
   constructor(config: VelaConfig = {}) {
     // No key supplied: masking only needs a secret, random key — the maps kept
@@ -39,10 +44,13 @@ export class Vela {
       asyncRecognizers: config.asyncRecognizers ?? [],
       recognizerFailure: config.recognizerFailure ?? 'block',
       recognizerTimeoutMs: config.recognizerTimeoutMs ?? 5000,
+      ...(config.restore ? { restore: config.restore } : {}),
       onRecognizerFailure: (err) =>
         this.logger.warn('recognizer_failed_continuing', { error: err instanceof Error ? err.message : String(err) }),
     };
     this.logger = new Logger('vela-core', config.enableLogging ?? false);
+    this.audit = config.audit;
+    this.auditContext = { ...(config.keyId ? { key_id: config.keyId } : {}) };
   }
 
   /**

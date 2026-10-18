@@ -5,37 +5,44 @@ import { maskFieldsAsync } from './formats.js';
 type Fn = (...args: any[]) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
-/**
- * Return a copy of `root` (built with Object.create, so everything else is
- * inherited) whose method at `path` is replaced by `make(original)`. If the
- * method doesn't exist on this client version, `root` is returned unchanged.
- */
-export function overrideMethod<T extends object>(root: T, path: string[], make: (original: Fn) => Fn): T {
-  const [name, ...rest] = path as [string, ...string[]];
-  const current = (root as Json)[name];
-  if (rest.length === 0) {
-    if (typeof current !== 'function') return root;
-    const out = Object.create(root);
-    out[name] = make(current.bind(root));
-    return out;
-  }
-  if (!current || (typeof current !== 'object' && typeof current !== 'function')) return root;
-  const child = overrideMethod(current, rest, make);
-  if (child === current) return root;
-  const out = Object.create(root);
-  out[name] = child;
-  return out;
-}
+/** Read-only and control methods that send no text: allowed through the wrapper untouched. */
+const SAFE_METHOD = /^(list|retrieve|get|del|delete|cancel|content|retrieveContent|results|poll|waitForProcessing|constructor|toString|toJSON|valueOf)$/;
 
-/** Replace methods Vela can't mask (batches, files, stream helpers…) with ones that throw. */
-export function blockMethods<T extends object>(client: T, blocked: Array<[string, string]>): T {
-  let out = client;
-  for (const [path, reason] of blocked) {
-    out = overrideMethod(out, path.split('.'), () => () => {
-      throw new VelaRouteBlockedError('SDK', path, reason);
+/**
+ * Wrap an SDK client in an allowlist. Methods in `overrides` (by dotted path,
+ * e.g. `chat.completions.create`) are replaced; read-only methods (`list`,
+ * `retrieve`, `del`, `cancel`…) pass; **every other method throws
+ * `VelaRouteBlockedError`**, so a method Vela doesn't know (a new SDK helper,
+ * legacy completions, raw `client.post`) can't send unmasked text.
+ */
+export function guardClient<T extends object>(client: T, overrides: Record<string, (original: Fn) => Fn>, reasons: Record<string, string> = {}): T {
+  const cache = new Map<string, unknown>();
+  const wrap = (target: object, path: string[]): unknown => {
+    const key = path.join('.');
+    const hit = cache.get(key);
+    if (hit) return hit;
+    const proxy = new Proxy(target, {
+      get(t, prop) {
+        const v: unknown = Reflect.get(t, prop, t);
+        if (typeof prop === 'symbol') return typeof v === 'function' ? v.bind(t) : v;
+        const p = [...path, prop];
+        const name = p.join('.');
+        if (typeof v === 'function') {
+          const override = overrides[name];
+          if (override) return override((v as Fn).bind(t));
+          if (SAFE_METHOD.test(prop)) return (v as Fn).bind(t);
+          return () => {
+            throw new VelaRouteBlockedError('SDK', name, reasons[name] ?? 'Vela does not mask this method');
+          };
+        }
+        if (v && typeof v === 'object') return wrap(v, p);
+        return v;
+      },
     });
-  }
-  return out;
+    cache.set(key, proxy);
+    return proxy;
+  };
+  return wrap(client, []) as T;
 }
 
 /** A method whose top-level text fields (`input`, `prompt`) are masked and whose result is restored. */

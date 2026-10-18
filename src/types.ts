@@ -135,6 +135,22 @@ export interface VelaConfig {
    * than tying up the event loop. Default: 2,000,000 characters.
    */
   maxInputChars?: number;
+  /**
+   * Whether placeholders in each part of a response are restored. Set
+   * `toolArguments: 'placeholders'` when tool calls run automatically, so a
+   * prompt-injected model can't put a real value into a tool call. Default:
+   * everything restored.
+   */
+  restore?: import('./core/session.js').RestorePolicy;
+  /**
+   * Audit sink. The proxy, fetch interceptor and Express middleware send it a
+   * value-free event before each request is forwarded and another when the
+   * response completes (see `jsonlFileSink`). If the sink throws before
+   * forwarding, the request is rejected (HTTP 503) and nothing is sent.
+   */
+  audit?: import('./core/audit.js').AuditSink;
+  /** Identifier of the FPE key, recorded in audit events (never the key itself). */
+  keyId?: string;
   /** Enable structured JSON logging. Default: false. */
   enableLogging?: boolean;
 }

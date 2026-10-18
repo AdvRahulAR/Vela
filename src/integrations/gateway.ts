@@ -1,7 +1,11 @@
 import type { Vela } from '../core/vela.js';
 import { createSseTransformer } from '../core/streaming.js';
 import { SESSION_HEADER } from '../config/constants.js';
-import { VelaError } from '../core/errors.js';
+import { VelaAuditError, VelaError } from '../core/errors.js';
+import { newRequestId, type AuditEvent } from '../core/audit.js';
+import type { MaskSession } from '../core/session.js';
+import { PACKAGE_VERSION } from '../config/constants.js';
+import { Logger } from '../utils/logger.js';
 import { detectApiFormat, maskFieldsAsync, maskLlmRequestAsync } from './formats.js';
 
 const STRIP_REQUEST_HEADERS = [
@@ -33,6 +37,83 @@ export interface ForwardOptions {
   apiKey?: string;
   sessionId?: string;
   fetchImpl?: typeof fetch;
+  /** Authenticated tenant (proxy auth). Recorded in audit events and bound into session ids. */
+  tenant?: string;
+}
+
+/** Response header carrying the audit request id. */
+export const REQUEST_ID_HEADER = 'x-vela-request-id';
+
+const auditLogger = new Logger('vela-audit', true);
+
+/** Model names go into audit events; anything that doesn't look like one is recorded as 'other'. */
+const safeModel = (m: unknown): string | undefined =>
+  typeof m === 'string' ? (/^[\w.:/@-]{1,128}$/.test(m) ? m : 'other') : undefined;
+
+/**
+ * Audit events for one request. `request()` runs before anything is sent and
+ * fails closed (VelaAuditError) if the sink throws; later events are best-effort.
+ */
+export class AuditTrail {
+  readonly id = newRequestId();
+  private readonly started = Date.now();
+  private readonly base: Omit<AuditEvent, 'event' | 'ts'>;
+  private done = false;
+
+  constructor(
+    private readonly vela: Vela,
+    req: { method: string; url: string; format?: string; model?: unknown; tenant?: string; stableSession?: boolean },
+  ) {
+    const u = new URL(req.url);
+    this.base = {
+      request_id: this.id,
+      vela_version: PACKAGE_VERSION,
+      method: req.method.toUpperCase(),
+      route: u.pathname,
+      upstream: u.host,
+      ...(req.format ? { format: req.format } : {}),
+      ...(safeModel(req.model) ? { model: safeModel(req.model) } : {}),
+      ...(req.tenant ? { tenant: req.tenant } : {}),
+      ...(req.stableSession !== undefined ? { session: req.stableSession ? 'stable' : 'random' } : {}),
+      ...vela.auditContext,
+    };
+  }
+
+  private event(e: Partial<AuditEvent> & Pick<AuditEvent, 'event'>): AuditEvent {
+    return { ...this.base, ts: new Date().toISOString(), ...e } as AuditEvent;
+  }
+
+  /** Before forwarding. Throws VelaAuditError if the sink fails. */
+  async request(session: MaskSession): Promise<void> {
+    const sink = this.vela.audit;
+    if (!sink) return;
+    try {
+      await sink(this.event({ event: 'vela.request', ner: session.nerStatus, ...session.stats() }));
+    } catch (err) {
+      throw new VelaAuditError(err);
+    }
+  }
+
+  /** After the response is complete. */
+  response(session: MaskSession, status: number): void {
+    this.final({ event: 'vela.response', status, restore: session.restoreReport, latency_ms: Date.now() - this.started });
+  }
+
+  /** The request was stopped by an error (never records the message). */
+  error(err: unknown): void {
+    const status = err instanceof VelaError ? err.status : 502;
+    const kind = status === 403 ? 'vela.blocked' : 'vela.error';
+    this.final({ event: kind, status, error_type: err instanceof Error ? err.name : 'Error', latency_ms: Date.now() - this.started });
+  }
+
+  private final(e: Partial<AuditEvent> & Pick<AuditEvent, 'event'>): void {
+    const sink = this.vela.audit;
+    if (!sink || this.done) return;
+    this.done = true;
+    Promise.resolve()
+      .then(() => sink(this.event(e)))
+      .catch((err: unknown) => auditLogger.error('audit_sink_failed', err, { request_id: this.id }));
+  }
 }
 
 /** True if this request is an LLM call Vela knows how to mask. */
@@ -91,21 +172,30 @@ export async function forwardLlmRequest(vela: Vela, req: ForwardRequest, opts: F
   const body = JSON.parse(req.body) as Record<string, unknown>;
 
   const sessionId = req.headers.get(SESSION_HEADER) ?? opts.sessionId ?? undefined;
-  const session = vela.createSession(sessionId ? { sessionId } : {});
-  const payload = await maskLlmRequestAsync(session, format, body);
+  const trail = new AuditTrail(vela, { method: 'POST', url: req.url, format, model: body.model, ...(opts.tenant ? { tenant: opts.tenant } : {}), stableSession: !!sessionId });
+  const session = vela.createSession(sessionOptions(sessionId, opts.tenant));
+  let upstream: Response;
+  try {
+    const payload = await maskLlmRequestAsync(session, format, body);
+    await trail.request(session);
 
-  const headers = upstreamHeaders(req.headers, opts.apiKey, format === 'anthropic-messages');
-  headers.set('content-type', 'application/json');
+    const headers = upstreamHeaders(req.headers, opts.apiKey, format === 'anthropic-messages');
+    headers.set('content-type', 'application/json');
 
-  const upstream = await doFetch(req.url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload),
-    ...(req.signal ? { signal: req.signal } : {}),
-  });
+    upstream = await doFetch(req.url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      ...(req.signal ? { signal: req.signal } : {}),
+    });
+  } catch (err) {
+    trail.error(err);
+    throw err;
+  }
 
   const contentType = upstream.headers.get('content-type') ?? '';
   const outHeaders = sanitizeResponseHeaders(upstream.headers);
+  outHeaders.set(REQUEST_ID_HEADER, trail.id);
 
   if (contentType.includes('text/event-stream') && upstream.body) {
     const transformer = createSseTransformer(format, session);
@@ -120,6 +210,7 @@ export async function forwardLlmRequest(vela: Vela, req: ForwardRequest, opts: F
         flush(controller) {
           const out = transformer.push(decoder.decode()) + transformer.end();
           if (out) controller.enqueue(encoder.encode(out));
+          trail.response(session, upstream.status);
         },
       }),
     );
@@ -127,10 +218,28 @@ export async function forwardLlmRequest(vela: Vela, req: ForwardRequest, opts: F
   }
 
   if (contentType.includes('json')) {
-    return new Response(await restoreBody(upstream, session), { status: upstream.status, statusText: upstream.statusText, headers: outHeaders });
+    const restored = await restoreBody(upstream, session);
+    trail.response(session, upstream.status);
+    return new Response(restored, { status: upstream.status, statusText: upstream.statusText, headers: outHeaders });
   }
 
+  trail.response(session, upstream.status);
   return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: outHeaders });
+}
+
+/**
+ * Session options for a request. A caller-chosen session id is bound to the
+ * authenticated tenant, so one tenant can't reproduce another's ciphertexts.
+ */
+function sessionOptions(sessionId: string | undefined, tenant: string | undefined): { sessionId?: string } {
+  if (!sessionId) return {};
+  return { sessionId: tenant ? `${tenant}\u0000${sessionId}` : sessionId };
+}
+
+/** Record a request that was rejected before Vela tried to mask it (a blocked route). */
+export function auditBlocked(vela: Vela, method: string, url: string, err: unknown, tenant?: string): void {
+  if (!vela.audit) return;
+  new AuditTrail(vela, { method, url, ...(tenant ? { tenant } : {}) }).error(err);
 }
 
 /** Write a web Response to a Node ServerResponse-like object. */
@@ -188,22 +297,29 @@ export async function forwardFieldsRequest(
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new VelaError('Request body must be a JSON object', 400);
   if (parsed.stream === true) throw new VelaError('Streaming is not supported on this route through Vela; nothing was sent', 400);
   const sessionId = req.headers.get(SESSION_HEADER) ?? opts.sessionId ?? undefined;
-  const session = vela.createSession(sessionId ? { sessionId } : {});
-  const payload = await maskFieldsAsync(session, fields, parsed);
-
-  const headers = upstreamHeaders(req.headers, opts.apiKey, new URL(req.url).hostname === 'api.anthropic.com');
-  headers.set('content-type', 'application/json');
-  const upstream = await doFetch(req.url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload),
-    ...(req.signal ? { signal: req.signal } : {}),
-  });
-  const outHeaders = sanitizeResponseHeaders(upstream.headers);
-  if ((upstream.headers.get('content-type') ?? '').includes('json')) {
-    return new Response(await restoreBody(upstream, session), { status: upstream.status, statusText: upstream.statusText, headers: outHeaders });
+  const trail = new AuditTrail(vela, { method: 'POST', url: req.url, format: 'fields', model: parsed.model, ...(opts.tenant ? { tenant: opts.tenant } : {}), stableSession: !!sessionId });
+  const session = vela.createSession(sessionOptions(sessionId, opts.tenant));
+  let upstream: Response;
+  try {
+    const payload = await maskFieldsAsync(session, fields, parsed);
+    await trail.request(session);
+    const headers = upstreamHeaders(req.headers, opts.apiKey, new URL(req.url).hostname === 'api.anthropic.com');
+    headers.set('content-type', 'application/json');
+    upstream = await doFetch(req.url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      ...(req.signal ? { signal: req.signal } : {}),
+    });
+  } catch (err) {
+    trail.error(err);
+    throw err;
   }
-  return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: outHeaders });
+  const outHeaders = sanitizeResponseHeaders(upstream.headers);
+  outHeaders.set(REQUEST_ID_HEADER, trail.id);
+  const restored = (upstream.headers.get('content-type') ?? '').includes('json') ? await restoreBody(upstream, session) : null;
+  trail.response(session, upstream.status);
+  return new Response(restored ?? upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: outHeaders });
 }
 
 /**

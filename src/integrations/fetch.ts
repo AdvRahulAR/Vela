@@ -1,6 +1,6 @@
 import type { Vela } from '../core/vela.js';
 import { VelaError, VelaRouteBlockedError } from '../core/errors.js';
-import { forwardFieldsRequest, forwardLlmRequest } from './gateway.js';
+import { auditBlocked, forwardFieldsRequest, forwardLlmRequest } from './gateway.js';
 import { classifyRoute } from './formats.js';
 import type { FetchInterceptorOptions } from '../types.js';
 
@@ -17,7 +17,9 @@ const KNOWN_PROVIDERS: Record<string, string[]> = {
  * are masked, body-free ones pass, and anything else is blocked (fail closed).
  */
 const PROVIDER_HOSTS = new Set(['api.openai.com', 'api.anthropic.com', 'api.groq.com', 'api.together.xyz', 'api.together.ai']);
-const isProviderHost = (host: string): boolean => PROVIDER_HOSTS.has(host) || host.endsWith('.openai.azure.com');
+const PROVIDER_SUFFIXES = ['.openai.azure.com', '.services.ai.azure.com', '.cognitiveservices.azure.com'];
+/** Lower-cased hostname without a trailing dot (`api.openai.com.` is the same host). */
+const normHost = (h: string): string => h.toLowerCase().replace(/\.$/, '');
 
 /**
  * Create a fetch() replacement that masks OpenAI (Chat Completions + Responses)
@@ -38,7 +40,12 @@ export function createFetchInterceptor(vela: Vela, opts: FetchInterceptorOptions
   }
 
   const hostMatches = (url: URL): boolean =>
-    hosts.size === 0 || hosts.has(url.host.toLowerCase()) || hosts.has(url.hostname.toLowerCase());
+    hosts.size === 0 || hosts.has(normHost(url.host)) || hosts.has(normHost(url.hostname));
+  // Hosts the caller listed in `providers` get the same fail-closed route rules as the built-in ones.
+  const isProviderHost = (url: URL): boolean => {
+    const h = normHost(url.hostname);
+    return PROVIDER_HOSTS.has(h) || PROVIDER_SUFFIXES.some((s) => h.endsWith(s)) || hosts.has(h) || hosts.has(normHost(url.host));
+  };
   const targetMatches = (url: URL): boolean =>
     !opts.targetUrls || opts.targetUrls.some((p) => url.pathname.endsWith(p) || url.href.includes(p));
 
@@ -54,13 +61,23 @@ export function createFetchInterceptor(vela: Vela, opts: FetchInterceptorOptions
     if (!hostMatches(url) || !targetMatches(url)) return originalFetch(input, init);
 
     const method = (init?.method ?? (isRequest ? (input as Request).method : 'GET')).toUpperCase();
-    const provider = isProviderHost(url.hostname.toLowerCase());
+    const provider = isProviderHost(url);
     const route = classifyRoute(method, url.pathname);
     // Off provider hosts only the well-known LLM paths are masked; other traffic is the app's own.
     const maskable = route.kind === 'llm' || (provider && route.kind === 'fields');
     if (!maskable) {
       if (provider && route.kind === 'blocked' && opts.passthrough !== 'all') {
-        throw new VelaRouteBlockedError(method, url.pathname, route.reason);
+        const err = new VelaRouteBlockedError(method, url.pathname, route.reason);
+        auditBlocked(vela, method, url.origin + url.pathname, err);
+        throw err;
+      }
+      // Body-free methods on a provider host: drop any body so nothing rides along unmasked.
+      if (provider && route.kind === 'safe' && (init?.body != null || (isRequest && (input as Request).body !== null))) {
+        const headers = new Headers(isRequest ? (input as Request).headers : undefined);
+        new Headers(init?.headers).forEach((v, k) => headers.set(k, v));
+        headers.delete('content-length');
+        const signal = init?.signal ?? (isRequest ? (input as Request).signal : undefined);
+        return originalFetch(href, { method, headers, ...(signal ? { signal } : {}) });
       }
       return originalFetch(input, init);
     }

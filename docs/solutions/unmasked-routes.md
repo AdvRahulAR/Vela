@@ -11,6 +11,12 @@
 
 **Invariant.** Not knowing how to mask something means blocking it (CLAUDE.md, invariant 1). One function owns route decisions (invariant 2).
 
-**Guarding tests.** `tests/route-matrix.test.ts`: masked and blocked route lists for the proxy, every body type for the fetch interceptor, and method lists for both SDK wrappers. All use the leak oracle.
+**Second round (found by reviewing the first fix).** A blocklist of SDK methods and a list of known text fields are themselves fail-open: whatever they don't list leaks. The fixes inverted both:
+- the wrappers are allowlists (`guardClient` in `wrap-util.ts`);
+- a residual pass (`MaskSession.maskResidual`) masks detected values in every string leaf the walk didn't cover.
+
+Smaller holes in the same round: bodies on DELETE requests, percent-encoded paths, `suffix`, nested arrays, and provider hosts outside the hardcoded set. **Lesson:** never enumerate what to block or what to mask; enumerate what is safe to skip.
+
+**Guarding tests.** `tests/route-matrix.test.ts`: masked and blocked route lists for the proxy, every body type for the fetch interceptor, and method lists for both SDK wrappers. All use the leak oracle. The "review findings on 0.4.1" suite covers the second round.
 
 **How it was found.** By sending synthetic PII to a recording upstream through every surface (the leak oracle), not by reading code. Do that for every new surface.

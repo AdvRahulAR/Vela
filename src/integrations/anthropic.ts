@@ -3,7 +3,7 @@ import type { MaskSession } from '../core/session.js';
 import { AnthropicStreamUnmasker, toRestoreSource } from '../core/streaming.js';
 import { maskLlmRequest, maskLlmRequestAsync } from './formats.js';
 import { wrapAsyncIterable, type WrapClientOptions } from './openai.js';
-import { blockMethods, overrideMethod } from './wrap-util.js';
+import { fieldsMethod, guardClient } from './wrap-util.js';
 import type { MaskResult, SessionOptions } from '../types.js';
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -55,25 +55,26 @@ export interface AnthropicCompatibleClient {
   };
 }
 
-const ANTHROPIC_BLOCKED: Array<[string, string]> = [
-  ['messages.stream', 'use create({ stream: true }) instead of the stream() helper'],
-  ['messages.batches.create', 'batch results arrive later and cannot be restored'],
-  ['beta.messages.stream', 'use create({ stream: true }) instead of the stream() helper'],
-  ['beta.messages.toolRunner', 'use create() and run tools yourself'],
-  ['beta.messages.batches.create', 'batch results arrive later and cannot be restored'],
-  ['beta.files.upload', 'file uploads cannot be masked'],
-];
+const ANTHROPIC_REASONS: Record<string, string> = {
+  'messages.stream': 'use create({ stream: true }) instead of the stream() helper',
+  'messages.batches.create': 'batch results arrive later and cannot be restored',
+  'beta.messages.stream': 'use create({ stream: true }) instead of the stream() helper',
+  'beta.messages.batches.create': 'batch results arrive later and cannot be restored',
+  'beta.files.upload': 'file uploads cannot be masked',
+};
 
 /**
  * Wrap an Anthropic client. `messages.create` (sync and `stream: true`),
- * `messages.countTokens` and their `beta.messages` equivalents are masked and
- * restored. Methods Vela can't mask (`messages.stream()`, batches, file
- * uploads) throw `VelaRouteBlockedError` instead of sending unmasked text.
+ * `messages.countTokens`, their `beta.messages` equivalents and legacy
+ * `completions.create` are masked and restored. Read-only methods pass. Every
+ * other method (`messages.stream()`, batches, file uploads, raw `client.post`…)
+ * throws `VelaRouteBlockedError` instead of sending unmasked text.
  */
 export function wrapAnthropicClient<T extends AnthropicCompatibleClient>(client: T, vela: Vela, opts: WrapClientOptions = {}): T {
+  const sid = (params: Json) => (typeof opts.sessionId === 'function' ? opts.sessionId(params) : opts.sessionId);
   const messagesMethod = (original: Fn) => async (params: Json, ...rest: unknown[]) => {
-    const sid = typeof opts.sessionId === 'function' ? opts.sessionId(params) : opts.sessionId;
-    const session = vela.createSession(sid !== undefined ? { sessionId: sid } : {});
+    const id = sid(params);
+    const session = vela.createSession(id !== undefined ? { sessionId: id } : {});
     const payload = await maskLlmRequestAsync(session, 'anthropic-messages', params);
     const result = await original(payload, ...rest);
     if (result && typeof result === 'object' && Symbol.asyncIterator in result) {
@@ -81,9 +82,15 @@ export function wrapAnthropicClient<T extends AnthropicCompatibleClient>(client:
     }
     return session.unmaskValue(result);
   };
-  let out: T = client;
-  for (const path of ['messages.create', 'messages.countTokens', 'beta.messages.create', 'beta.messages.countTokens']) {
-    out = overrideMethod(out, path.split('.'), messagesMethod);
-  }
-  return blockMethods(out, ANTHROPIC_BLOCKED);
+  return guardClient(
+    client,
+    {
+      'messages.create': messagesMethod,
+      'messages.countTokens': messagesMethod,
+      'beta.messages.create': messagesMethod,
+      'beta.messages.countTokens': messagesMethod,
+      'completions.create': fieldsMethod(vela, ['prompt'], sid),
+    },
+    ANTHROPIC_REASONS,
+  );
 }

@@ -8,7 +8,7 @@ import {
   type RestoreSource,
 } from '../core/streaming.js';
 import { maskLlmRequest, maskLlmRequestAsync } from './formats.js';
-import { blockMethods, fieldsMethod, overrideMethod } from './wrap-util.js';
+import { fieldsMethod, guardClient } from './wrap-util.js';
 import type { MaskResult, OpenAIRequest, OpenAIResponse, SessionOptions } from '../types.js';
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -136,38 +136,28 @@ function isAsyncIterable(x: unknown): x is AsyncIterable<Json> {
   return !!x && typeof x === 'object' && Symbol.asyncIterator in x;
 }
 
-/** Methods that would send text Vela can't mask and restore. They throw `VelaRouteBlockedError`. */
-const OPENAI_BLOCKED: Array<[string, string]> = [
-  ['chat.completions.stream', 'use create({ stream: true }) instead of the stream() helper'],
-  ['chat.completions.runTools', 'use create() and run tools yourself'],
-  ['beta.chat.completions.stream', 'use create({ stream: true }) instead of the stream() helper'],
-  ['beta.chat.completions.runTools', 'use create() and run tools yourself'],
-  ['responses.stream', 'use create({ stream: true }) instead of the stream() helper'],
-  ['batches.create', 'batch results arrive later and cannot be restored'],
-  ['files.create', 'file uploads cannot be masked'],
-  ['uploads.create', 'file uploads cannot be masked'],
-  ['audio.speech.create', 'audio cannot be masked'],
-  ['audio.transcriptions.create', 'audio cannot be masked'],
-  ['audio.translations.create', 'audio cannot be masked'],
-  ['images.generate', 'image prompts are not masked'],
-  ['images.edit', 'image prompts are not masked'],
-  ['conversations.create', 'stored conversations cannot be restored'],
-  ['conversations.items.create', 'stored conversations cannot be restored'],
-  ['beta.threads.create', 'Assistants threads cannot be restored'],
-  ['beta.threads.createAndRun', 'Assistants threads cannot be restored'],
-  ['beta.threads.messages.create', 'Assistants threads cannot be restored'],
-  ['beta.threads.runs.create', 'Assistants threads cannot be restored'],
-  ['beta.assistants.create', 'Assistants instructions cannot be restored'],
-  ['fineTuning.jobs.create', 'fine-tuning data cannot be masked'],
-];
+/** Why common methods are blocked (any method not wrapped or read-only is blocked). */
+const OPENAI_REASONS: Record<string, string> = {
+  'chat.completions.stream': 'use create({ stream: true }) instead of the stream() helper',
+  'chat.completions.runTools': 'use create() and run tools yourself',
+  'responses.stream': 'use create({ stream: true }) instead of the stream() helper',
+  'batches.create': 'batch results arrive later and cannot be restored',
+  'files.create': 'file uploads cannot be masked',
+  'uploads.create': 'file uploads cannot be masked',
+  'audio.speech.create': 'audio cannot be masked',
+  'audio.transcriptions.create': 'audio cannot be masked',
+  'images.generate': 'image prompts are not masked',
+  'beta.threads.messages.create': 'Assistants threads cannot be restored',
+};
 
 /**
  * Wrap an OpenAI client. Masked on the way out and restored on the way in:
  * `chat.completions.create`/`parse` and `responses.create`/`parse` (sync and
  * streaming), `responses.inputTokens.count`, `completions.create`,
- * `embeddings.create` and `moderations.create`. Methods Vela can't mask
- * (`batches.create`, `files.create`, the `stream()` helpers, Assistants…)
- * throw `VelaRouteBlockedError` instead of sending unmasked text.
+ * `embeddings.create` and `moderations.create`. Read-only methods (`list`,
+ * `retrieve`, `del`, `cancel`…) pass through. Every other method (`batches.create`,
+ * `files.create`, the `stream()` helpers, Assistants, raw `client.post`…)
+ * throws `VelaRouteBlockedError` instead of sending unmasked text.
  */
 export function wrapOpenAiClient<T extends OpenAICompatibleClient>(client: T, vela: Vela, opts: WrapClientOptions = {}): T {
   const sessionFor = (params: Json): MaskSession => {
@@ -190,17 +180,21 @@ export function wrapOpenAiClient<T extends OpenAICompatibleClient>(client: T, ve
   };
   const fields = (f: string[]) => fieldsMethod(vela, f, (p) => resolveSessionId(opts.sessionId, p));
 
-  let out: T = client;
-  for (const path of ['chat.completions.create', 'chat.completions.parse', 'beta.chat.completions.parse']) {
-    out = overrideMethod(out, path.split('.'), chatMethod);
-  }
-  for (const path of ['responses.create', 'responses.parse', 'responses.inputTokens.count']) {
-    out = overrideMethod(out, path.split('.'), responsesMethod);
-  }
-  out = overrideMethod(out, ['completions', 'create'], fields(['prompt']));
-  out = overrideMethod(out, ['embeddings', 'create'], fields(['input']));
-  out = overrideMethod(out, ['moderations', 'create'], fields(['input']));
-  return blockMethods(out, OPENAI_BLOCKED);
+  return guardClient(
+    client,
+    {
+      'chat.completions.create': chatMethod,
+      'chat.completions.parse': chatMethod,
+      'beta.chat.completions.parse': chatMethod,
+      'responses.create': responsesMethod,
+      'responses.parse': responsesMethod,
+      'responses.inputTokens.count': responsesMethod,
+      'completions.create': fields(['prompt', 'suffix']),
+      'embeddings.create': fields(['input']),
+      'moderations.create': fields(['input']),
+    },
+    OPENAI_REASONS,
+  );
 }
 
 export type { RestoreSource };

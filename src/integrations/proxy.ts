@@ -4,7 +4,7 @@ import type { Vela } from '../core/vela.js';
 import { DEFAULT_ANTHROPIC_URL, DEFAULT_PROXY_HOST, DEFAULT_PROXY_PORT, DEFAULT_UPSTREAM_URL, PACKAGE_VERSION } from '../config/constants.js';
 import { Logger } from '../utils/logger.js';
 import { classifyRoute, detectApiFormat } from './formats.js';
-import { forwardFieldsRequest, forwardLlmRequest, forwardPassthrough, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
+import { auditBlocked, forwardFieldsRequest, forwardLlmRequest, forwardPassthrough, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
 import type { ProxyServerOptions } from '../types.js';
 
 function sendJson(res: import('node:http').ServerResponse, status: number, body: unknown): void {
@@ -28,8 +28,12 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
   const port = opts.port ?? DEFAULT_PROXY_PORT;
   const host = opts.host ?? DEFAULT_PROXY_HOST;
   const upstream = (opts.upstream ?? DEFAULT_UPSTREAM_URL).replace(/\/+$/, '');
-  const upstreamFor = (path: string): string =>
-    !opts.upstream && detectApiFormat(path) === 'anthropic-messages' ? DEFAULT_ANTHROPIC_URL : upstream;
+  // Without an explicit upstream, Anthropic requests (Messages paths, or any request carrying
+  // Anthropic's headers, e.g. GET /v1/models from the Anthropic SDK) go to api.anthropic.com.
+  const upstreamFor = (path: string, headers: import('node:http').IncomingHttpHeaders): string =>
+    !opts.upstream && (detectApiFormat(path) === 'anthropic-messages' || headers['anthropic-version'] !== undefined)
+      ? DEFAULT_ANTHROPIC_URL
+      : upstream;
   const maxBody = opts.maxBodySizeBytes ?? 10 * 1024 * 1024;
   const logger = new Logger('vela-proxy', true);
   const passthrough = normalizePassthrough(opts.passthrough);
@@ -58,6 +62,7 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
       req.resume();
       const err = new VelaRouteBlockedError(method, urlPath, route.reason);
       logger.warn('proxy_route_blocked', { method, urlPath });
+      auditBlocked(vela, method, upstreamFor(urlPath, req.headers) + urlPath, err);
       sendJson(res, err.status, { error: { message: err.message, type: 'vela_route_blocked' } });
       return;
     }
@@ -91,7 +96,7 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
       if (!res.writableEnded) controller.abort();
     });
     const forward = {
-      url: upstreamFor(urlPath) + rawUrl,
+      url: upstreamFor(urlPath, req.headers) + rawUrl,
       method,
       headers: nodeHeadersToWeb(req.headers),
       // Body-free methods never forward a body, so nothing can ride along unmasked.
