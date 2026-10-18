@@ -8,3 +8,4 @@ One note per fixed gap: what leaked or broke, why, the invariant that now preven
 | [audit-and-policy.md](audit-and-policy.md) | F3, F4: audit evidence, declarative policy | 0.5.0 |
 | [restoration-and-identifiers.md](restoration-and-identifiers.md) | F5, F7: tool-call restoration, checksum-valid ciphertext | 0.5.0 |
 | [proxy-and-keys.md](proxy-and-keys.md) | F8, F9: proxy authentication, tenants, key providers | 0.5.0 |
+| [review-050.md](review-050.md) | Second-opinion review of 0.5.0: nine gaps in the new controls | 0.5.0 |

@@ -3,12 +3,10 @@ import type { MaskSession } from '../core/session.js';
 import { AnthropicStreamUnmasker, toRestoreSource } from '../core/streaming.js';
 import { maskLlmRequest, maskLlmRequestAsync } from './formats.js';
 import { wrapAsyncIterable, type WrapClientOptions } from './openai.js';
-import { baseUrlOf, fieldsMethod, guardClient } from './wrap-util.js';
-import { enforceRequestPolicy } from './gateway.js';
+import { auditedMethod, fieldsMethod, guardClient } from './wrap-util.js';
 import type { MaskResult, SessionOptions } from '../types.js';
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-type Fn = (...args: any[]) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 /**
  * Mask an Anthropic Messages API request: `system` (string or blocks), message
@@ -72,26 +70,25 @@ const ANTHROPIC_REASONS: Record<string, string> = {
  * throws `VelaRouteBlockedError` instead of sending unmasked text.
  */
 export function wrapAnthropicClient<T extends AnthropicCompatibleClient>(client: T, vela: Vela, opts: WrapClientOptions = {}): T {
-  const sid = (params: Json) => (typeof opts.sessionId === 'function' ? opts.sessionId(params) : opts.sessionId);
-  const messagesMethod = (original: Fn) => async (params: Json, ...rest: unknown[]) => {
-    const id = sid(params);
-    const session = vela.createSession(id !== undefined ? { sessionId: id } : {});
-    enforceRequestPolicy(vela, baseUrlOf(client), params);
-    const payload = await maskLlmRequestAsync(session, 'anthropic-messages', params);
-    const result = await original(payload, ...rest);
-    if (result && typeof result === 'object' && Symbol.asyncIterator in result) {
-      return wrapAsyncIterable(result, new AnthropicStreamUnmasker(session));
-    }
-    return session.unmaskValue(result);
-  };
+  const sessionId = (params: Json) => (typeof opts.sessionId === 'function' ? opts.sessionId(params) : opts.sessionId);
+  const messages = (route: string) =>
+    auditedMethod({
+      vela,
+      client,
+      route,
+      format: 'anthropic-messages',
+      sessionId,
+      mask: (session, params) => maskLlmRequestAsync(session, 'anthropic-messages', params),
+      stream: (result, session, done) => wrapAsyncIterable(result, new AnthropicStreamUnmasker(session), done),
+    });
   return guardClient(
     client,
     {
-      'messages.create': messagesMethod,
-      'messages.countTokens': messagesMethod,
-      'beta.messages.create': messagesMethod,
-      'beta.messages.countTokens': messagesMethod,
-      'completions.create': fieldsMethod(vela, ['prompt'], sid, baseUrlOf(client)),
+      'messages.create': messages('/v1/messages'),
+      'messages.countTokens': messages('/v1/messages/count_tokens'),
+      'beta.messages.create': messages('/v1/messages'),
+      'beta.messages.countTokens': messages('/v1/messages/count_tokens'),
+      'completions.create': fieldsMethod(vela, client, '/v1/complete', ['prompt'], sessionId),
     },
     ANTHROPIC_REASONS,
   );

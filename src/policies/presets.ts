@@ -13,7 +13,7 @@ export const POLICY_PRESETS: Record<string, VelaPolicy> = {
     version: 1,
     description: 'India DPDP Act baseline: mask personal data, never send secrets, synthetic-safe Aadhaar, tool calls keep placeholders.',
     entities: { SECRET_KEY: 'block', JWT: 'block', AADHAAR: 'fpe-synthetic' },
-    restore: { toolArguments: 'placeholders' },
+    restore: { toolArguments: 'placeholders', thinking: 'placeholders' },
   },
   'india-bfsi': {
     id: 'india-bfsi',
@@ -31,7 +31,7 @@ export const POLICY_PRESETS: Record<string, VelaPolicy> = {
       DATE_OF_BIRTH: 'redact',
     },
     nonText: 'block',
-    restore: { toolArguments: 'placeholders' },
+    restore: { toolArguments: 'placeholders', thinking: 'placeholders' },
   },
   pci: {
     id: 'pci',
@@ -40,7 +40,7 @@ export const POLICY_PRESETS: Record<string, VelaPolicy> = {
     packs: ['pci'],
     entities: { CREDIT_CARD: 'fpe-synthetic', CARD_CVV: 'block', CARD_TRACK_DATA: 'block', CARD_EXPIRY: 'redact', SECRET_KEY: 'block' },
     nonText: 'block',
-    restore: { toolArguments: 'placeholders' },
+    restore: { toolArguments: 'placeholders', thinking: 'placeholders' },
   },
   'hipaa-safe-harbor': {
     id: 'hipaa-safe-harbor',
@@ -49,7 +49,7 @@ export const POLICY_PRESETS: Record<string, VelaPolicy> = {
     packs: ['us', 'health-in'],
     entities: { DATE_OF_BIRTH: 'redact', SECRET_KEY: 'block', JWT: 'block' },
     nonText: 'block',
-    restore: { toolArguments: 'placeholders' },
+    restore: { toolArguments: 'placeholders', thinking: 'placeholders' },
   },
   'gdpr-pseudonymise': {
     id: 'gdpr-pseudonymise',
@@ -57,7 +57,7 @@ export const POLICY_PRESETS: Record<string, VelaPolicy> = {
     description: 'GDPR pseudonymisation (Art. 4(5)): EU/UK national identifiers masked, secrets blocked, tool calls keep placeholders.',
     packs: ['eu-uk', 'intl'],
     entities: { SECRET_KEY: 'block', JWT: 'block' },
-    restore: { toolArguments: 'placeholders' },
+    restore: { toolArguments: 'placeholders', thinking: 'placeholders' },
   },
 };
 

@@ -162,6 +162,11 @@ export interface VelaConfig {
    * requirement and detector packs. Its id and hash go into audit events.
    */
   policy?: import('./core/policy.js').VelaPolicy;
+  /**
+   * Entity types your own recognizers (sync or async) can return, so a policy
+   * may name them. Policy entries for any other unknown type are an error.
+   */
+  extraEntityTypes?: string[];
   /** Identifier of the FPE key, recorded in audit events (never the key itself). */
   keyId?: string;
   /** Enable structured JSON logging. Default: false. */
@@ -336,6 +341,11 @@ export interface ProxyServerOptions {
   insecure?: boolean;
   /** Requests per minute per tenant (or client IP without auth). Excess gets HTTP 429. */
   rateLimitPerMinute?: number;
+  /**
+   * Serve Prometheus metrics (counts only) at `GET /metrics`. Default: true.
+   * `/metrics`, `/health` and `/readyz` don't need a client token.
+   */
+  metrics?: boolean;
   /** Serve HTTPS with this certificate and key (PEM). */
   tls?: { cert: string | Buffer; key: string | Buffer };
 }

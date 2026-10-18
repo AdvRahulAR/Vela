@@ -87,10 +87,12 @@ export class AuditTrail {
 
   /** Before forwarding. Throws VelaAuditError if the sink fails. */
   async request(session: MaskSession): Promise<void> {
+    const e = this.event({ event: 'vela.request', ner: session.nerStatus, ...session.stats() });
+    this.vela.notify(e);
     const sink = this.vela.audit;
     if (!sink) return;
     try {
-      await sink(this.event({ event: 'vela.request', ner: session.nerStatus, ...session.stats() }));
+      await sink(e);
     } catch (err) {
       throw new VelaAuditError(err);
     }
@@ -110,11 +112,14 @@ export class AuditTrail {
   }
 
   private final(e: Partial<AuditEvent> & Pick<AuditEvent, 'event'>): void {
-    const sink = this.vela.audit;
-    if (!sink || this.done) return;
+    if (this.done) return;
     this.done = true;
+    const ev = this.event(e);
+    this.vela.notify(ev);
+    const sink = this.vela.audit;
+    if (!sink) return;
     Promise.resolve()
-      .then(() => sink(this.event(e)))
+      .then(() => sink(ev))
       .catch((err: unknown) => auditLogger.error('audit_sink_failed', err, { request_id: this.id }));
   }
 }
@@ -264,7 +269,6 @@ export function enforceRequestPolicy(vela: Vela, url: string | undefined, body: 
 
 /** Record a request that was rejected before Vela tried to mask it (a blocked route). */
 export function auditBlocked(vela: Vela, method: string, url: string, err: unknown, tenant?: string): void {
-  if (!vela.audit) return;
   new AuditTrail(vela, { method, url, ...(tenant ? { tenant } : {}) }).error(err);
 }
 

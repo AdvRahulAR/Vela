@@ -98,6 +98,7 @@ export { forwardLlmRequest, forwardFieldsRequest, enforceRequestPolicy, REQUEST_
 export { createFetchInterceptor } from './integrations/fetch.js';
 export { createExpressMiddleware } from './integrations/express.js';
 export { runProxy } from './integrations/proxy.js';
+export { VelaMetrics } from './integrations/metrics.js';
 
 // Observability
 export { Logger } from './utils/logger.js';

@@ -83,7 +83,11 @@ function chainHash(prev: string, e: AuditEvent): string {
  * is detectable with `verifyAuditChain()`. Writes are synchronous so events
  * stay in order and a failed write fails the request.
  */
-export function jsonlFileSink(path: string, opts: { hashChain?: boolean } = {}): AuditSink {
+export function jsonlFileSink(
+  path: string,
+  opts: { hashChain?: boolean; /** @internal for tests */ append?: (path: string, data: string) => void } = {},
+): AuditSink {
+  const append = opts.append ?? ((p: string, d: string) => appendFileSync(p, d, { mode: 0o600 }));
   const chain = opts.hashChain ?? true;
   let prev = GENESIS;
   if (chain && existsSync(path)) {
@@ -92,18 +96,24 @@ export function jsonlFileSink(path: string, opts: { hashChain?: boolean } = {}):
     if (last) prev = (JSON.parse(last) as AuditEvent).hash ?? GENESIS;
   }
   return (e) => {
-    let out: AuditEvent = e;
-    if (chain) {
-      const hash = chainHash(prev, e);
-      out = { ...e, prev_hash: prev, hash };
-      prev = hash;
-    }
-    appendFileSync(path, JSON.stringify(out) + '\n', { mode: 0o600 });
+    const hash = chain ? chainHash(prev, e) : undefined;
+    const out: AuditEvent = chain ? { ...e, prev_hash: prev, hash: hash as string } : e;
+    append(path, JSON.stringify(out) + '\n');
+    // Advance only after the write succeeded, so a failed write can't break the chain.
+    if (hash) prev = hash;
   };
 }
 
-/** Check a hash-chained audit log. Returns the first line (1-based) that doesn't verify. */
-export function verifyAuditChain(content: string): { ok: true; events: number } | { ok: false; line: number } {
+/**
+ * Check a hash-chained audit log. Returns the first line (1-based) that doesn't
+ * verify. The chain detects edited, inserted and reordered lines, and deletions
+ * anywhere except at the end: to detect truncation, record the last `hash`
+ * somewhere else (your SIEM, a ticket) and pass it as `expectHead`.
+ */
+export function verifyAuditChain(
+  content: string,
+  opts: { expectHead?: string } = {},
+): { ok: true; events: number; head: string } | { ok: false; line: number } {
   let prev = GENESIS;
   const lines = content.trimEnd().split('\n').filter(Boolean);
   for (let i = 0; i < lines.length; i++) {
@@ -117,5 +127,8 @@ export function verifyAuditChain(content: string): { ok: true; events: number } 
     if (prev_hash !== prev || hash !== chainHash(prev, rest as AuditEvent)) return { ok: false, line: i + 1 };
     prev = hash;
   }
-  return { ok: true, events: lines.length };
+  if (opts.expectHead && !lines.some((l) => (JSON.parse(l) as AuditEvent).hash === opts.expectHead)) {
+    return { ok: false, line: lines.length + 1 };
+  }
+  return { ok: true, events: lines.length, head: prev };
 }

@@ -8,7 +8,7 @@ export interface RestoreSource {
 }
 
 const JSON_STRING_KEYS = new Set(['arguments', 'partial_json']);
-const TOOL_ARG_KEYS = new Set(['arguments', 'partial_json', 'input']);
+const TOOL_ARG_KEYS = new Set(['arguments', 'parsed_arguments', 'partial_json', 'input', 'code']);
 const THINKING_KEYS = new Set(['thinking', 'reasoning_content', 'reasoning', 'summary']);
 
 /**
@@ -242,7 +242,9 @@ export class ResponsesStreamUnmasker implements EventUnmasker {
       const base = ev.type.slice(0, -'.delta'.length);
       const key = this.key(base, ev);
       this.templates.set(key, ev);
-      const kind = base.includes('arguments') ? 'tool_args' : base.includes('reasoning') ? 'thinking' : 'content';
+      // Only known text events count as content or thinking; every other delta (function and
+      // custom tool input, code interpreter code, future tool events) is a tool argument.
+      const kind = /output_text|refusal|transcript/.test(base) ? 'content' : base.includes('reasoning') ? 'thinking' : 'tool_args';
       return [{ ...ev, delta: this.lanes.get(key, base.includes('arguments'), kind).feed(ev.delta) }];
     }
     if (ev.type.endsWith('.done')) {

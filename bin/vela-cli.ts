@@ -61,14 +61,15 @@ COMMANDS:
   policy <name|file>  Validate a policy (preset or .json/.yaml file) and print it with its hash
   policies            List policy presets
   packs               List detector packs and their entity types
-  audit verify <file> Check a hash-chained audit log (exit code 1 if it was altered)
+  audit verify <file> Check a hash-chained audit log (exit code 1 if it was altered). Add
+                      --head <hash> (the last hash you recorded elsewhere) to also detect truncation
   help                Show this help
 
 PROXY OPTIONS:
   --port, -p <num>      Port (default: 8787)
   --host, -H <addr>     Interface to bind (default: 127.0.0.1 — loopback only)
   --upstream, -u <url>  Upstream base URL (default: OpenAI; Anthropic paths auto-route to api.anthropic.com)
-  --api-key, -a <key>   Upstream API key to inject (otherwise the client's own key is forwarded)
+  --api-key, -a <key>   Upstream API key to inject (or env VELA_UPSTREAM_API_KEY; otherwise the client's own key is forwarded)
   --passthrough <mode>  Routes Vela can't mask. safe (default): body-free requests (GET /v1/models…) are
                         forwarded, anything else (batches, files, unknown endpoints) gets 403.
                         none: 404 for everything except maskable routes. all: forward unknown routes
@@ -234,12 +235,14 @@ async function main(): Promise<void> {
   if (command === 'audit') {
     const file = positionals[2];
     if (positionals[1] !== 'verify' || !file) fail('usage: vela audit verify <file>');
-    const r = verifyAuditChain(readFileSync(file, 'utf8'));
+    const head = typeof flags['head'] === 'string' ? flags['head'] : undefined;
+    const r = verifyAuditChain(readFileSync(file, 'utf8'), head ? { expectHead: head } : {});
     if (r.ok) {
-      console.log(`OK: ${r.events} events, chain intact`);
+      console.log(`OK: ${r.events} events, chain intact. Head: ${r.head}`);
+      if (!head) console.log('Record the head hash outside this file; pass it as --head next time to detect truncation.');
       return;
     }
-    console.error(`ALTERED: line ${r.line} does not verify (edited, inserted or deleted lines from here on)`);
+    console.error(`ALTERED: line ${r.line} does not verify (edited, inserted, reordered or deleted lines${head ? ', or truncated before the expected head' : ''})`);
     process.exit(1);
   }
 
@@ -293,7 +296,7 @@ async function main(): Promise<void> {
       ...(port !== undefined ? { port } : {}),
       ...(typeof flags['host'] === 'string' ? { host: flags['host'] } : {}),
       ...(typeof flags['upstream'] === 'string' ? { upstream: flags['upstream'] } : {}),
-      ...(typeof flags['api-key'] === 'string' ? { apiKey: flags['api-key'] } : {}),
+      ...(typeof (flags['api-key'] ?? process.env['VELA_UPSTREAM_API_KEY']) === 'string' ? { apiKey: (flags['api-key'] ?? process.env['VELA_UPSTREAM_API_KEY']) as string } : {}),
       ...passthroughOf(flags),
     });
     return;

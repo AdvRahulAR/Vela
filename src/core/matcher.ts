@@ -127,8 +127,9 @@ export class Restorer {
   private readonly window: number;
 
   constructor(replacements: Replacement[]) {
+    // Redactions are never restored, whichever path built the restorer.
     this.targets = replacements
-      .filter((r) => r.masked.length > 0)
+      .filter((r) => r.masked.length > 0 && r.method !== 'redact')
       .sort((a, b) => b.masked.length - a.masked.length)
       .map(buildTarget);
     const branches: Array<[Target, string]> = [

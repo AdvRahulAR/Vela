@@ -1,0 +1,48 @@
+image:
+  repository: ghcr.io/advrahular/vela-privacy
+  tag: "0.5.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+# Policy: a preset name, or inline policy content (YAML) mounted from a ConfigMap.
+policy:
+  preset: india-bfsi
+  # inline: |
+  #   id: acme-bank
+  #   ...
+
+# Detector packs on top of the policy's packs (comma-separated).
+packs: ""
+
+# Upstream LLM API. Empty: OpenAI, with Anthropic routes sent to api.anthropic.com.
+upstream: ""
+
+# Existing Secrets (create them yourself; the chart never holds secret values).
+secrets:
+  # Secret with key "tokens": one "<tenant> <token>" per line. Required.
+  authTokens: vela-auth-tokens
+  # Secret with key "VELA_FPE_KEY" (64 hex chars). Optional: without it each pod uses a random key.
+  fpeKey: ""
+  # Secret with key "VELA_UPSTREAM_API_KEY". Optional: otherwise clients send their own provider key.
+  upstreamApiKey: ""
+
+presidio:
+  # URL of a Presidio Analyzer inside the cluster. Required if the policy sets ner.required.
+  url: ""
+  optional: false
+
+rateLimitPerMinute: 600
+
+service:
+  type: ClusterIP
+  port: 8787
+
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits: { cpu: "1", memory: 512Mi }
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8787"
+  prometheus.io/path: /metrics

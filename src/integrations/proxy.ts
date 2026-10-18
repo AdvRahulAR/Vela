@@ -8,6 +8,7 @@ import { Logger } from '../utils/logger.js';
 import { classifyRoute, detectApiFormat } from './formats.js';
 import { auditBlocked, forwardFieldsRequest, forwardLlmRequest, forwardPassthrough, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
 import type { ProxyServerOptions } from '../types.js';
+import { VelaMetrics } from './metrics.js';
 
 function sendJson(res: import('node:http').ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' });
@@ -85,17 +86,27 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
     );
   }
   const limit = opts.rateLimitPerMinute ? makeRateLimiter(opts.rateLimitPerMinute) : null;
+  // Failed logins are limited per client address whether or not rateLimitPerMinute is set.
+  const failedLogins = makeRateLimiter(30);
+  const metrics = opts.metrics === false ? null : new VelaMetrics();
+  if (metrics) vela.onEvent(metrics.record);
 
   const handler: RequestListener = async (req, res) => {
     const rawUrl = req.url ?? '/';
     const urlPath = rawUrl.split('?')[0] ?? '/';
-    const isHealth = req.method === 'GET' && (urlPath === '/health' || urlPath === '/');
+    const isHealth = req.method === 'GET' && (urlPath === '/health' || urlPath === '/' || urlPath === '/readyz' || urlPath === '/metrics');
 
     let tenant: string | undefined;
     if (authenticate && !isHealth) {
       const t = authenticate(req);
       if (t === null) {
         req.resume();
+        const wait = failedLogins(req.socket.remoteAddress ?? 'unknown');
+        if (wait > 0) {
+          res.setHeader('retry-after', String(wait));
+          sendJson(res, 429, { error: { message: 'Too many failed authentication attempts', type: 'vela_rate_limited' } });
+          return;
+        }
         sendJson(res, 401, { error: { message: `Missing or invalid ${AUTH_HEADER} header`, type: 'vela_unauthorized' } });
         return;
       }
@@ -111,6 +122,20 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
       }
     }
 
+    if (isHealth && urlPath === '/metrics') {
+      if (!metrics) {
+        sendJson(res, 404, { error: { message: 'Metrics are disabled' } });
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' });
+      res.end(metrics.render());
+      return;
+    }
+    if (isHealth && urlPath === '/readyz') {
+      const r = await vela.checkReady();
+      sendJson(res, r.ready ? 200 : 503, { status: r.ready ? 'ready' : 'not_ready', ner: r.ner });
+      return;
+    }
     if (isHealth) {
       sendJson(res, 200, {
         status: 'healthy',

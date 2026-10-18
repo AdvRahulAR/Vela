@@ -4,7 +4,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Vela, runProxy, jsonlFileSink, verifyAuditChain, type AuditEvent } from '../src/index.js';
@@ -56,7 +56,12 @@ describe('audit trail', () => {
       assert.ok((resEv.restore?.restored.content ?? 0) >= 5);
       assert.equal(blocked.status, 403);
       assert.equal(blocked.error_type, 'VelaRouteBlockedError');
-      assert.deepEqual(verifyAuditChain(raw), { ok: true, events: 3 });
+      const v = verifyAuditChain(raw);
+      assert.ok(v.ok && v.events === 3);
+      // Truncation is caught only against a head recorded elsewhere.
+      const firstTwo = raw.split('\n').slice(0, 2).join('\n');
+      assert.equal(verifyAuditChain(firstTwo).ok, true);
+      assert.equal(verifyAuditChain(firstTwo, { expectHead: v.head }).ok, false);
 
       // Editing any line breaks the chain.
       writeFileSync(file, raw.replace('"status":200', '"status":201'));
@@ -72,7 +77,29 @@ describe('audit trail', () => {
     const ev = { event: 'vela.blocked', request_id: 'r', ts: 't', vela_version: 'v', method: 'POST', route: '/x' } as AuditEvent;
     jsonlFileSink(file)(ev);
     jsonlFileSink(file)(ev);
-    assert.deepEqual(verifyAuditChain(readFileSync(file, 'utf8')), { ok: true, events: 2 });
+    const v = verifyAuditChain(readFileSync(file, 'utf8'));
+    assert.ok(v.ok && v.events === 2);
+  });
+
+  it('a failed write does not break the chain', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vela-audit-'));
+    const file = join(dir, 'audit.jsonl');
+    let failNext = false;
+    const sink = jsonlFileSink(file, {
+      append: (p, d) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error('disk full');
+        }
+        appendFileSync(p, d);
+      },
+    });
+    const ev = { event: 'vela.blocked', request_id: 'r', ts: 't', vela_version: 'v', method: 'POST', route: '/x' } as AuditEvent;
+    sink(ev);
+    failNext = true;
+    assert.throws(() => sink(ev), /disk full/);
+    sink(ev);
+    assert.ok(verifyAuditChain(readFileSync(file, 'utf8')).ok);
   });
 
   it('fails closed when the audit sink is unavailable', async () => {

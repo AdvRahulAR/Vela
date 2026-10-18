@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vela.fullname" . }}
+  labels: {{- include "vela.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{- include "vela.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "vela.labels" . | nindent 8 }}
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+        checksum/policy: {{ .Values.policy | toJson | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: vela
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --auth-token-file
+            - /etc/vela/tokens/tokens
+            - --audit-stdout
+            - --policy
+            - {{ if .Values.policy.inline }}/etc/vela/policy/policy.yaml{{ else }}{{ .Values.policy.preset }}{{ end }}
+            {{- with .Values.packs }}
+            - --packs
+            - {{ . | quote }}
+            {{- end }}
+            {{- with .Values.upstream }}
+            - --upstream
+            - {{ . | quote }}
+            {{- end }}
+            {{- with .Values.presidio.url }}
+            - --presidio-url
+            - {{ . | quote }}
+            {{- end }}
+            {{- if .Values.presidio.optional }}
+            - --presidio-optional
+            {{- end }}
+            {{- with .Values.rateLimitPerMinute }}
+            - --rate-limit
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            {{- if .Values.secrets.fpeKey }}
+            - name: VELA_FPE_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.fpeKey }}, key: VELA_FPE_KEY } }
+            {{- end }}
+            {{- if .Values.secrets.upstreamApiKey }}
+            - name: VELA_UPSTREAM_API_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.upstreamApiKey }}, key: VELA_UPSTREAM_API_KEY } }
+            {{- end }}
+          ports:
+            - { name: http, containerPort: 8787 }
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tokens, mountPath: /etc/vela/tokens, readOnly: true }
+            {{- if .Values.policy.inline }}
+            - { name: policy, mountPath: /etc/vela/policy, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: tokens
+          secret: { secretName: {{ .Values.secrets.authTokens }} }
+        {{- if .Values.policy.inline }}
+        - name: policy
+          configMap: { name: {{ include "vela.fullname" . }}-policy }
+        {{- end }}

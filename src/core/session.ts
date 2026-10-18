@@ -19,14 +19,13 @@ import type {
 } from '../types.js';
 
 /**
- * Keys the residual pass never touches: identifiers, enums and opaque blobs
- * (base64 data, thinking signatures) that must reach the provider unchanged.
+ * Opaque blobs the residual pass leaves alone: only under these keys, and only
+ * when the value really is base64 or a data: URL. "ravi@example.com" under
+ * `data` is not a blob and is scanned like anything else.
  */
-const RESIDUAL_SKIP_KEYS = new Set([
-  'model', 'role', 'type', 'id', 'object', 'stream', 'tool_choice', 'signature', 'data', 'b64_json',
-  'image_url', 'file_data', 'file_id', 'encrypted_content', 'previous_response_id', 'tool_call_id',
-  'tool_use_id', 'call_id', 'media_type', 'encoding_format', 'service_tier', 'reasoning_effort',
-]);
+const BLOB_KEYS = new Set(['signature', 'data', 'b64_json', 'file_data', 'encrypted_content', 'image_url', 'url']);
+const BLOB_VALUE = /^(?:data:[\w/+.-]+;base64,)?[A-Za-z0-9+/=_-]{16,}$/;
+const isBlob = (key: string | undefined, v: string): boolean => !!key && BLOB_KEYS.has(key) && BLOB_VALUE.test(v);
 
 /** JSON keys whose string values are themselves JSON documents (tool-call arguments). */
 const JSON_STRING_KEYS = new Set(['arguments', 'partial_json']);
@@ -254,12 +253,26 @@ export class MaskSession {
    * session already masked are left alone, so nothing is masked twice.
    */
   maskResidual<T>(value: T, key?: string): T {
-    if (key && RESIDUAL_SKIP_KEYS.has(key)) return value;
-    if (typeof value === 'string') return this.maskText(value, key ? `${humanizeKey(key)}: ` : undefined, true) as unknown as T;
+    if (typeof value === 'string') {
+      if (isBlob(key, value)) return value;
+      return this.maskText(value, key ? `${humanizeKey(key)}: ` : undefined, true) as unknown as T;
+    }
     if (Array.isArray(value)) return value.map((v) => this.maskResidual(v, key)) as unknown as T;
     if (value && typeof value === 'object') {
+      const o = value as Record<string, unknown>;
+      // A signed thinking block must reach the provider exactly as it produced it. That is only
+      // safe when the client never saw real values in it (restore.thinking: 'placeholders');
+      // otherwise its text is masked like any other text and the provider may reject the signature.
+      if (o.type === 'thinking' && typeof o.signature === 'string' && this.engine.restore?.thinking === 'placeholders') return value;
       const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(value)) out[k] = this.maskResidual(v, k);
+      for (const [k, v] of Object.entries(o)) {
+        // Credentials the caller deliberately gives the provider for remote MCP servers.
+        const credential =
+          (key === 'mcp_servers' && k === 'authorization_token') || (o.type === 'mcp' && (k === 'headers' || k === 'authorization'));
+        // Free-form keys (metadata maps) can hold personal data too.
+        const mk = this.maskText(k, undefined, true);
+        out[mk] = credential ? v : this.maskResidual(v, k);
+      }
       return out as T;
     }
     return value;
