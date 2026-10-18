@@ -253,6 +253,8 @@ export class MaskSession {
    * session already masked are left alone, so nothing is masked twice.
    */
   maskResidual<T>(value: T, key?: string): T {
+    // Binary content (Bedrock document/image bytes) is not text; turning it into a plain object would corrupt it.
+    if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return value;
     if (typeof value === 'string') {
       if (isBlob(key, value)) return value;
       return this.maskText(value, key ? `${humanizeKey(key)}: ` : undefined, true) as unknown as T;
@@ -377,8 +379,10 @@ export class MaskSession {
     }
     if (Array.isArray(value)) return value.map((v) => this.unmaskValue(v, key, f)) as unknown as T;
     if (value && typeof value === 'object') {
+      // Gemini marks reasoning parts with `thought: true` rather than a key name.
+      const inner = (value as Record<string, unknown>).thought === true && f !== 'tool_args' ? 'thinking' : f;
       const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(value)) out[k] = this.unmaskValue(v, k, f);
+      for (const [k, v] of Object.entries(value)) out[k] = this.unmaskValue(v, k, inner);
       return out as T;
     }
     return value;

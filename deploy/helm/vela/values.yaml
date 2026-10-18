@@ -24,7 +24,9 @@ secrets:
   authTokens: vela-auth-tokens
   # Secret with key "VELA_FPE_KEY" (64 hex chars). Optional: without it each pod uses a random key.
   fpeKey: ""
-  # Secret with key "VELA_UPSTREAM_API_KEY". Optional: otherwise clients send their own provider key.
+  # Secret with any of VELA_UPSTREAM_API_KEY (the --upstream, or OpenAI when auto-routing),
+  # VELA_ANTHROPIC_API_KEY, VELA_GEMINI_API_KEY. Optional: otherwise clients send their own provider key.
+  # A key is only ever sent to its own provider.
   upstreamApiKey: ""
 
 presidio:

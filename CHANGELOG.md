@@ -9,6 +9,8 @@ Compliance controls: policies, audit evidence, detector packs, synthetic-safe FP
 - `Replacement.method` can now be `'redact'`.
 - A non-loopback proxy `host` without `authTokens` throws unless `insecure: true` (CLI: `--insecure`). Previously it only warned.
 - Unknown string fields in requests (`user`, `metadata`…) are now masked by the residual pass (shipped in 0.4.1's second round).
+- **Upstream keys:** without `upstream`, the proxy and Express middleware send `apiKey` only to OpenAI. Anthropic and Gemini requests get their own key from `apiKeys` (CLI `--anthropic-api-key`, `--gemini-api-key`) or none. Before, one key went to every provider.
+- `/metrics` has no tenant labels unless `metricsTenantLabels: true`.
 
 **Added**
 - **Policies** (`policy` option, `loadPolicy`, `validatePolicy`, `policyHash`, `POLICY_PRESETS`, `resolvePolicy`; CLI `--policy`, `vela policy`, `vela policies`):
@@ -57,6 +59,13 @@ Compliance controls: policies, audit evidence, detector packs, synthetic-safe FP
   - SDK wrappers write audit events;
   - unknown policy entity types are rejected;
   - failed proxy logins are rate-limited.
+- **Fixes from reviewing the provider work:**
+  - the Vertex global endpoint (`aiplatform.googleapis.com`) gets provider route rules;
+  - Gemini `thought` parts follow the thinking restore policy;
+  - keys are sent only to their own provider;
+  - Gemini model allowlists use the model in the path;
+  - Bedrock image and document bytes pass through intact, and text documents are masked;
+  - `/readyz` results are cached for 5 seconds.
 - Docs: `docs/REGULATORY_MAPPING.md`, `docs/DETECTION_REPORT.md`.
 
 - **Audit events** (`audit` option, `jsonlFileSink`, `consoleSink`, `verifyAuditChain`):

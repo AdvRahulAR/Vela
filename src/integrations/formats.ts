@@ -202,6 +202,8 @@ function walkGemini(body: Json, visit: Visit): Json {
   return out;
 }
 
+const TEXT_DOC_FORMATS = new Set(['txt', 'md', 'csv', 'html']);
+
 /** Bedrock Converse content blocks. */
 function walkConverseBlocks(content: unknown, visit: Visit): unknown {
   if (!Array.isArray(content)) return content;
@@ -209,6 +211,12 @@ function walkConverseBlocks(content: unknown, visit: Visit): unknown {
     if (!b || typeof b !== 'object') return b;
     const o: Json = { ...b };
     if (typeof o.text === 'string') o.text = visit(o.text, 'text');
+    // Text-format documents are bytes on the wire but text to the model: mask them as text.
+    if (o.document && TEXT_DOC_FORMATS.has(o.document.format) && o.document.source?.bytes instanceof Uint8Array) {
+      const text = new TextDecoder().decode(o.document.source.bytes);
+      const masked = visit(text, 'text');
+      if (typeof masked === 'string') o.document = { ...o.document, source: { ...o.document.source, bytes: new TextEncoder().encode(masked) } };
+    }
     if (o.toolUse?.input !== undefined) o.toolUse = { ...o.toolUse, input: visit(o.toolUse.input, 'value') };
     if (Array.isArray(o.toolResult?.content)) {
       o.toolResult = {
@@ -337,7 +345,8 @@ export function findNonText(body: unknown): string[] {
     const o = v as Json;
     // Gemini parts and Bedrock Converse blocks carry media under a key rather than a `type`.
     for (const k of ['inlineData', 'inline_data', 'fileData', 'file_data', 'image', 'document', 'video']) {
-      if (o[k] && typeof o[k] === 'object' && !(k === 'document' && o.type)) found.add(k);
+      const textDoc = k === 'document' && (o.type || TEXT_DOC_FORMATS.has(o[k]?.format));
+      if (o[k] && typeof o[k] === 'object' && !textDoc) found.add(k);
     }
     if (typeof o.type === 'string' && PART_KEYS.some((k) => k in o)) {
       const textDoc = o.type === 'document' && o.source?.type === 'text';

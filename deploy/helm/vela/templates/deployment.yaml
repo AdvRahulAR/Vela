@@ -11,7 +11,9 @@ spec:
     metadata:
       labels: {{- include "vela.labels" . | nindent 8 }}
       annotations:
-        {{- toYaml .Values.podAnnotations | nindent 8 }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         checksum/policy: {{ .Values.policy | toJson | sha256sum }}
     spec:
       automountServiceAccountToken: false
@@ -54,8 +56,10 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ .Values.secrets.fpeKey }}, key: VELA_FPE_KEY } }
             {{- end }}
             {{- if .Values.secrets.upstreamApiKey }}
-            - name: VELA_UPSTREAM_API_KEY
-              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.upstreamApiKey }}, key: VELA_UPSTREAM_API_KEY } }
+            {{- range $k := list "VELA_UPSTREAM_API_KEY" "VELA_ANTHROPIC_API_KEY" "VELA_GEMINI_API_KEY" }}
+            - name: {{ $k }}
+              valueFrom: { secretKeyRef: { name: {{ $.Values.secrets.upstreamApiKey }}, key: {{ $k }}, optional: true } }
+            {{- end }}
             {{- end }}
           ports:
             - { name: http, containerPort: 8787 }

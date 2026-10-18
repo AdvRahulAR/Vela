@@ -309,8 +309,13 @@ export interface FetchInterceptorOptions {
 
 export interface ExpressMiddlewareOptions {
   upstream?: string;
-  /** Upstream API key. Sent as `Authorization: Bearer` (OpenAI) or `x-api-key` (Anthropic). */
+  /**
+   * Upstream API key. With `upstream` set, it is sent to that upstream. Without
+   * it, only OpenAI requests get it; set `apiKeys` for Anthropic and Gemini.
+   */
   apiKey?: string;
+  /** Per-provider keys for auto-routed requests (no `upstream`). A provider without a key gets none. */
+  apiKeys?: Partial<Record<'openai' | 'anthropic' | 'gemini', string>>;
 }
 
 export interface ProxyServerOptions {
@@ -318,8 +323,13 @@ export interface ProxyServerOptions {
   /** Interface to bind. Default: 127.0.0.1 (loopback only). Use 0.0.0.0 to expose deliberately. */
   host?: string;
   upstream?: string;
-  /** Upstream API key. Sent as `Authorization: Bearer` (OpenAI) or `x-api-key` (Anthropic). */
+  /**
+   * Upstream API key. With `upstream` set, it is sent to that upstream. Without
+   * it, only OpenAI requests get it; set `apiKeys` for Anthropic and Gemini.
+   */
   apiKey?: string;
+  /** Per-provider keys for auto-routed requests (no `upstream`). A provider without a key gets none. */
+  apiKeys?: Partial<Record<'openai' | 'anthropic' | 'gemini', string>>;
   maxBodySizeBytes?: number;
   /**
    * Routes Vela cannot mask:
@@ -346,6 +356,8 @@ export interface ProxyServerOptions {
    * `/metrics`, `/health` and `/readyz` don't need a client token.
    */
   metrics?: boolean;
+  /** Label metrics by tenant. Default false, because `/metrics` needs no token. */
+  metricsTenantLabels?: boolean;
   /** Serve HTTPS with this certificate and key (PEM). */
   tls?: { cert: string | Buffer; key: string | Buffer };
 }

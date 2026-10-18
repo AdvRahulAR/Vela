@@ -8,6 +8,12 @@ export class VelaMetrics {
   private readonly counters = new Map<string, number>();
   private latencySum = 0;
   private latencyCount = 0;
+  private readonly tenantLabels: boolean;
+
+  /** `tenantLabels`: label series by tenant. Off by default: /metrics needs no token, and tenant names are not public. */
+  constructor(opts: { tenantLabels?: boolean } = {}) {
+    this.tenantLabels = opts.tenantLabels ?? false;
+  }
 
   private inc(name: string, labels: Record<string, string | undefined>, by = 1): void {
     const l = Object.entries(labels)
@@ -20,7 +26,7 @@ export class VelaMetrics {
 
   /** Feed one audit event (pass to `vela.onEvent`). */
   readonly record = (e: AuditEvent): void => {
-    const tenant = e.tenant;
+    const tenant = this.tenantLabels ? e.tenant : undefined;
     switch (e.event) {
       case 'vela.request':
         for (const [type, n] of Object.entries(e.entities ?? {})) this.inc('vela_entities_detected_total', { type, tenant }, n);

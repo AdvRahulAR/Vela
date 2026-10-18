@@ -19,6 +19,7 @@ const KNOWN_PROVIDERS: Record<string, string[]> = {
  */
 const PROVIDER_HOSTS = new Set([
   'api.openai.com', 'api.anthropic.com', 'api.groq.com', 'api.together.xyz', 'api.together.ai', 'generativelanguage.googleapis.com',
+  'aiplatform.googleapis.com',
 ]);
 const PROVIDER_SUFFIXES = ['.openai.azure.com', '.services.ai.azure.com', '.cognitiveservices.azure.com', '-aiplatform.googleapis.com'];
 /** Bedrock runtime endpoints (requests are SigV4-signed, so they can only be blocked here; see wrapBedrockClient). */

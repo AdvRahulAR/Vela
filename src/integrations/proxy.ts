@@ -6,7 +6,7 @@ import type { Vela } from '../core/vela.js';
 import { DEFAULT_ANTHROPIC_URL, DEFAULT_GEMINI_URL, DEFAULT_PROXY_HOST, DEFAULT_PROXY_PORT, DEFAULT_UPSTREAM_URL, PACKAGE_VERSION } from '../config/constants.js';
 import { Logger } from '../utils/logger.js';
 import { classifyRoute, detectApiFormat } from './formats.js';
-import { auditBlocked, forwardFieldsRequest, forwardLlmRequest, forwardPassthrough, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
+import { auditBlocked, selectApiKey, forwardFieldsRequest, forwardLlmRequest, forwardPassthrough, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
 import type { ProxyServerOptions } from '../types.js';
 import { VelaMetrics } from './metrics.js';
 
@@ -91,7 +91,8 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
   const limit = opts.rateLimitPerMinute ? makeRateLimiter(opts.rateLimitPerMinute) : null;
   // Failed logins are limited per client address whether or not rateLimitPerMinute is set.
   const failedLogins = makeRateLimiter(30);
-  const metrics = opts.metrics === false ? null : new VelaMetrics();
+  const metrics = opts.metrics === false ? null : new VelaMetrics({ tenantLabels: opts.metricsTenantLabels === true });
+  let ready: { at: number; r: ReturnType<Vela['checkReady']> } | null = null;
   if (metrics) vela.onEvent(metrics.record);
 
   const handler: RequestListener = async (req, res) => {
@@ -135,7 +136,9 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
       return;
     }
     if (isHealth && urlPath === '/readyz') {
-      const r = await vela.checkReady();
+      // Cached briefly so unauthenticated probes can't flood the NER service.
+      if (!ready || Date.now() - ready.at > 5000) ready = { at: Date.now(), r: vela.checkReady() };
+      const r = await ready.r;
       sendJson(res, r.ready ? 200 : 503, { status: r.ready ? 'ready' : 'not_ready', ner: r.ner });
       return;
     }
@@ -200,7 +203,8 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
       ...(body && route.kind !== 'safe' ? { body } : {}),
       signal: controller.signal,
     };
-    const fwdOpts = { ...(opts.apiKey ? { apiKey: opts.apiKey } : {}), ...(tenant ? { tenant } : {}) };
+    const key = selectApiKey(opts, forward.url, route.kind === 'llm' ? route.format : null);
+    const fwdOpts = { ...(key ? { apiKey: key } : {}), ...(tenant ? { tenant } : {}) };
     try {
       const response =
         route.kind === 'llm'

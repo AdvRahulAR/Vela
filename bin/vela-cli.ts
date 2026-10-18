@@ -69,7 +69,11 @@ PROXY OPTIONS:
   --port, -p <num>      Port (default: 8787)
   --host, -H <addr>     Interface to bind (default: 127.0.0.1 — loopback only)
   --upstream, -u <url>  Upstream base URL (default: OpenAI; Anthropic paths auto-route to api.anthropic.com)
-  --api-key, -a <key>   Upstream API key to inject (or env VELA_UPSTREAM_API_KEY; otherwise the client's own key is forwarded)
+  --api-key, -a <key>   Upstream API key to inject (or env VELA_UPSTREAM_API_KEY; otherwise the client's own key is
+                        forwarded). With --upstream it goes there; without, only to OpenAI
+  --anthropic-api-key <k>, --gemini-api-key <k>
+                        Keys for auto-routed Anthropic / Gemini requests (or VELA_ANTHROPIC_API_KEY,
+                        VELA_GEMINI_API_KEY). A provider without a key gets none
   --passthrough <mode>  Routes Vela can't mask. safe (default): body-free requests (GET /v1/models…) are
                         forwarded, anything else (batches, files, unknown endpoints) gets 403.
                         none: 404 for everything except maskable routes. all: forward unknown routes
@@ -161,6 +165,16 @@ function complianceConfig(flags: Record<string, string | boolean>): Pick<VelaCon
     for (const s of sinks) await s(e);
   };
   return out;
+}
+
+/** Per-provider upstream keys for auto-routing (no --upstream): flags or VELA_<PROVIDER>_API_KEY. */
+function providerKeys(flags: Record<string, string | boolean>): { apiKeys?: Partial<Record<'openai' | 'anthropic' | 'gemini', string>> } {
+  const keys: Partial<Record<'openai' | 'anthropic' | 'gemini', string>> = {};
+  for (const p of ['anthropic', 'gemini'] as const) {
+    const v = flags[`${p}-api-key`] ?? process.env[`VELA_${p.toUpperCase()}_API_KEY`];
+    if (typeof v === 'string' && v) keys[p] = v;
+  }
+  return Object.keys(keys).length ? { apiKeys: keys } : {};
 }
 
 function authTokensOf(flags: Record<string, string | boolean>): Record<string, string> | undefined {
@@ -297,6 +311,7 @@ async function main(): Promise<void> {
       ...(typeof flags['host'] === 'string' ? { host: flags['host'] } : {}),
       ...(typeof flags['upstream'] === 'string' ? { upstream: flags['upstream'] } : {}),
       ...(typeof (flags['api-key'] ?? process.env['VELA_UPSTREAM_API_KEY']) === 'string' ? { apiKey: (flags['api-key'] ?? process.env['VELA_UPSTREAM_API_KEY']) as string } : {}),
+      ...providerKeys(flags),
       ...passthroughOf(flags),
     });
     return;

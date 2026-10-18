@@ -77,6 +77,8 @@ Run through this for every change that touches an integration. Each item is a wa
 - Every new provider route or SDK method: is it in `tests/route-matrix.test.ts`, as masked or blocked?
 - Every log, error message and audit field: can it contain a value? Only counts, types, routes and timings may be logged.
 - Every new option: is the default the fail-closed choice, with the open choice an explicit opt-in?
+- Every new provider: are its hosts (global and regional), its model location (body or path), its key header, its reasoning markers and its binary fields covered, with a route-matrix row?
+- Every key or credential: can it reach a host it wasn't configured for?
 
 ## Known limitations (not findings)
 

@@ -159,12 +159,29 @@ function upstreamHeaders(source: Headers, apiKey: string | undefined, provider: 
   return headers;
 }
 
-const providerOf = (format: string | null, url: URL): 'anthropic' | 'gemini' | 'openai' =>
+export const providerOf = (format: string | null, url: URL): 'anthropic' | 'gemini' | 'openai' =>
   format === 'anthropic-messages' || url.hostname === 'api.anthropic.com'
     ? 'anthropic'
     : format === 'gemini' || url.hostname.endsWith('googleapis.com')
       ? 'gemini'
       : 'openai';
+
+/**
+ * Which upstream API key to inject. With an explicit `upstream`, every request
+ * goes there and `apiKey` belongs to it. Without one, requests are routed to
+ * several providers, so each gets only its own key (`apiKeys`), and `apiKey`
+ * only reaches the default upstream (OpenAI). A key is never sent to a
+ * provider it wasn't configured for.
+ */
+export function selectApiKey(
+  opts: { upstream?: string; apiKey?: string; apiKeys?: Partial<Record<'openai' | 'anthropic' | 'gemini', string>> },
+  url: string,
+  format: string | null,
+): string | undefined {
+  if (opts.upstream) return opts.apiKey;
+  const provider = providerOf(format, new URL(url));
+  return opts.apiKeys?.[provider] ?? (provider === 'openai' ? opts.apiKey : undefined);
+}
 
 /** Restore a JSON (or plain-text) upstream body. */
 async function restoreBody(upstream: Response, session: { unmaskValue: <T>(v: T) => T; unmask: (t: string) => { text: string } }): Promise<string> {
@@ -190,7 +207,7 @@ export async function forwardLlmRequest(vela: Vela, req: ForwardRequest, opts: F
   const body = JSON.parse(req.body) as Record<string, unknown>;
 
   const sessionId = req.headers.get(SESSION_HEADER) ?? opts.sessionId ?? undefined;
-  const trail = new AuditTrail(vela, { method: 'POST', url: req.url, format, model: body.model, ...(opts.tenant ? { tenant: opts.tenant } : {}), stableSession: !!sessionId });
+  const trail = new AuditTrail(vela, { method: 'POST', url: req.url, format, model: modelOf(req.url, body), ...(opts.tenant ? { tenant: opts.tenant } : {}), stableSession: !!sessionId });
   const session = vela.createSession(sessionOptions(sessionId, opts.tenant));
   let upstream: Response;
   try {
@@ -256,6 +273,16 @@ function sessionOptions(sessionId: string | undefined, tenant: string | undefine
 }
 
 /**
+ * The model a request names. Gemini and Vertex put it in the path
+ * (`…/models/{model}:generateContent`), which wins over any body field.
+ */
+export function modelOf(url: string | undefined, body: Record<string, unknown>): string | undefined {
+  const fromPath = url ? /\/models\/([^/:]+):/.exec(new URL(url).pathname)?.[1] : undefined;
+  if (fromPath) return decodeURIComponent(fromPath);
+  return typeof body.model === 'string' ? body.model : undefined;
+}
+
+/**
  * Request-level policy checks, before any masking: provider and model
  * allowlists and non-text content. Throws VelaPolicyBlockedError.
  */
@@ -268,7 +295,7 @@ export function enforceRequestPolicy(vela: Vela, url: string | undefined, body: 
     throw new VelaPolicyBlockedError(`upstream ${u.host} is not in providers.allow`, 403);
   }
   if (policy.models) {
-    const model = typeof body.model === 'string' ? body.model : '';
+    const model = modelOf(url, body) ?? '';
     if (!policy.models.allow.some((p) => globMatch(p, model))) throw new VelaPolicyBlockedError(`model "${safeModel(model) ?? ''}" is not in models.allow`, 403);
   }
   if (policy.nonText === 'block') {

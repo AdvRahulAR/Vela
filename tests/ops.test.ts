@@ -11,7 +11,7 @@ const close = (s: { close: (cb: () => void) => void }) => new Promise<void>((r) 
 describe('ops endpoints', () => {
   it('/metrics counts requests, entities and blocks without values', async () => {
     const up = await startUpstream();
-    const proxy = runProxy(new Vela(), { port: 0, upstream: up.url, authTokens: { 'metrics-token-0001': 'ops' } });
+    const proxy = runProxy(new Vela(), { port: 0, upstream: up.url, authTokens: { 'metrics-token-0001': 'ops' }, metricsTenantLabels: true });
     try {
       const base = await baseUrlOf(proxy);
       const h = { 'content-type': 'application/json', 'x-vela-key': 'metrics-token-0001' };

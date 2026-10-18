@@ -2,7 +2,7 @@ import { VelaError } from '../core/errors.js';
 import type { Vela } from '../core/vela.js';
 import { DEFAULT_ANTHROPIC_URL, DEFAULT_UPSTREAM_URL } from '../config/constants.js';
 import { detectApiFormat } from './formats.js';
-import { forwardLlmRequest, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
+import { forwardLlmRequest, nodeHeadersToWeb, pipeResponseToNode, selectApiKey } from './gateway.js';
 import type { ExpressMiddlewareOptions } from '../types.js';
 
 export interface MinimalRequest {
@@ -71,7 +71,10 @@ export function createExpressMiddleware(
           body,
           signal: controller.signal,
         },
-        opts.apiKey ? { apiKey: opts.apiKey } : {},
+        (() => {
+          const key = selectApiKey(opts, upstreamFor(req.path) + req.path, detectApiFormat(req.path));
+          return key ? { apiKey: key } : {};
+        })(),
       );
       if (res.writeHead) {
         await pipeResponseToNode(response, res as Required<Pick<MinimalResponse, 'writeHead'>> & MinimalResponse);
