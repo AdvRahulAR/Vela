@@ -32,3 +32,5 @@
 {"text":"token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U","entities":[{"type":"JWT","value":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"}],"tags":["secret"]}
 {"text":"DOB 14/03/1990","entities":[{"type":"DATE_OF_BIRTH","value":"14/03/1990"}],"tags":["personal"]}
 {"text":"PIN code 682001","entities":[{"type":"PIN_CODE","value":"682001"}],"tags":["personal"]}
+{"text":"Send the refund to UPI anitha191@paytm.","entities":[{"type":"UPI_ID","value":"anitha191@paytm"}],"tags":["upi","sentence-end"]}
+{"text":"bhai Fatima ka number 9278951314 hai, usko mail kar do","entities":[{"type":"PERSON","value":"Fatima"},{"type":"PHONE","value":"9278951314"}],"tags":["phone","hinglish"]}

@@ -47,7 +47,8 @@ const CONTAINER_TYPES: ReadonlySet<EntityType> = new Set(['ADDRESS']);
 
 const digitCount = (s: string): number => (s.match(/\d/g) ?? []).length;
 
-const PHONE_CUES = /\b(?:phone|ph|mobile|mob|cell|call|contact|whatsapp|wa|tel|telephone|sms|text|reach|dial|my number|number is)\b[^\n]{0,20}$/i;
+const PHONE_CUES =
+  /\b(?:phone|ph|mobile|mob|cell|call|contact|whatsapp|wa|tel|telephone|sms|text|reach|dial|my number|number is|(?:ka|ki|ke|mera|meri|mere|uska|uski|apna|apni|tera|teri)\s+(?:number|no|mobile|phone))\b[^\n]{0,20}$/i;
 const NON_PHONE_CUES =
   /\b(?:order|invoice|inv|txn|transaction|ref|reference|id|no|number|account|a\/c|acct|policy|ticket|tracking|awb|serial|sr|bill|receipt|utr|pnr|isbn|amount|rs|inr|usd|qty|code|batch|lot|sku|item|part|model|case)\b[^\n\w]{0,6}$|[₹$€£]\s*$/i;
 
@@ -135,7 +136,8 @@ const BUILTIN_PATTERNS: DetectorPattern[] = [
   },
   {
     type: 'UPI_ID',
-    regex: /\b[A-Za-z0-9][A-Za-z0-9._-]{1,254}@[A-Za-z][A-Za-z0-9]{1,63}\b(?![.@\w-])/g,
+    // A trailing full stop ends the sentence, not the handle ("pay rahul@okaxis."); "@domain.com" stays an email.
+    regex: /\b[A-Za-z0-9][A-Za-z0-9._-]{1,254}@[A-Za-z][A-Za-z0-9]{1,63}\b(?![@\w-]|\.\w)/g,
     confidence: 0.95,
   },
 
@@ -280,7 +282,7 @@ const BUILTIN_PATTERNS: DetectorPattern[] = [
     // Labelled address: "Address: …" up to newline / next field
     type: 'ADDRESS',
     regex:
-      /\b(?:address|addr\.?|residential address|permanent address|residing at|resident of|r\/o)\s*[:\-–]?\s*([^\n;|]{6,160}?)(?=\s*(?:[\n;|]|$|(?<!\b(?:[A-Z]|No|Nr|St|Rd|Opp|Apt|Bldg|Flat|Plot))\.(?:\s|$)|[,.]?\s*\b(?:phone|ph|mobile|mob|tel|email|e-mail|pan|aadhaar|dob|d\.o\.b|date of birth|gstin|passport|account|a\/c)\b))/gi,
+      /\b(?:address|addr\.?|residential address|permanent address|residing at|resident of|r\/o)\s*[:\-–]?\s*([^\n;|]{6,160}?)(?=\s*(?:[\n;|]|$|(?<!\b(?:[A-Z]|No|Nr|St|Rd|Opp|Apt|Bldg|Flat|Plot))\.(?:\s|$)|[,.]?\s*\b(?:phone|ph|mobile|mob|tel|email|e-mail|pan|aadhaar|dob|d\.o\.b|date of birth|gstin|passport|account|a\/c)\b)|(?<=\b[1-9]\d{2} ?\d{3}|\b\d{5})(?=\s*,\s*(?:has|have|had|is|are|was|were|who|which|that|and|but|filed|stated|submitted|said|says)\b))/gi,
     confidence: 0.9,
     group: 1,
   },
@@ -309,6 +311,15 @@ const BUILTIN_PATTERNS: DetectorPattern[] = [
 const TITLE_SEQ = /(?<![\w@])[A-Z][a-z]+(?:['-][A-Za-z][a-z]+)?(?:[ ]+(?:[A-Z][a-z]+(?:['-][A-Za-z][a-z]+)?|[A-Z]\.))*(?![\w@])/g;
 const UPPER_SEQ = /(?<![\w@])[A-Z]{2,}(?:[ ]+[A-Z]{2,}){1,3}(?![\w@])/g;
 
+/** Capitalised words that put a surname into a business or place name, not a person's name. */
+const NOT_GIVEN_NAMES = new Set([
+  'hotel', 'times', 'hospital', 'clinic', 'stores', 'store', 'bank', 'motors', 'traders', 'sweets', 'jewellers', 'textiles',
+  'restaurant', 'cafe', 'bhavan', 'bhawan', 'nagar', 'road', 'street', 'college', 'school', 'university', 'temple', 'church',
+  'mosque', 'park', 'market', 'plaza', 'tower', 'mall', 'group', 'industries', 'enterprises', 'associates', 'brothers', 'sons',
+  'agency', 'agencies', 'travels', 'studio', 'media', 'news', 'express', 'herald', 'post', 'daily', 'weekly', 'team', 'dear',
+  'project', 'case', 'report', 'committee', 'commission', 'house', 'villa', 'estate', 'colony', 'hall', 'centre', 'center',
+]);
+
 /** Heuristic person-name detection (see names.ts). */
 function detectNames(text: string): DetectedEntity[] {
   const out: DetectedEntity[] = [];
@@ -336,8 +347,14 @@ function detectNames(text: string): DetectedEntity[] {
           const strong = STRONG_NAME_CONTEXT.test(pre);
           const firstWord = first.w.replace(/\.$/, '');
           const gaz = isKnownFirstName(firstWord) && (span.length >= 2 || !isAmbiguousName(firstWord));
+          // "Anitha Menon": an unknown first name followed by a known surname ("Hotel Patel" is not one).
+          const bySurname =
+            span.length === 2 &&
+            /^[A-Z][a-z]{2,}$/.test(firstWord) &&
+            !NOT_GIVEN_NAMES.has(firstWord.toLowerCase()) &&
+            isKnownSurname(lastW.w.replace(/\.$/, ''));
           const isInitialOnly = span.every((s) => /^[A-Z]\.$/.test(s.w));
-          if ((strong || gaz) && !isInitialOnly) {
+          if ((strong || gaz || bySurname) && !isInitialOnly) {
             out.push({ type: 'PERSON', start, end, value: text.slice(start, end), confidence: strong ? 0.9 : 0.8 });
           }
         }

@@ -5,3 +5,4 @@
 {"text":"Ship to 4th Cross, Indiranagar, Bengaluru 560038","entities":[{"type":"ADDRESS","value":"4th Cross, Indiranagar, Bengaluru 560038"}],"tags":["address","hard"]}
 {"text":"Address: 45, Gandhi Nagar, Kochi. Phone 9876543210","entities":[{"type":"ADDRESS","value":"45, Gandhi Nagar, Kochi"},{"type":"PHONE","value":"9876543210"}],"tags":["address","overcapture"]}
 {"text":"resident of Plot No. 7, Banjara Hills.","entities":[{"type":"ADDRESS","value":"Plot No. 7, Banjara Hills"}],"tags":["address"]}
+{"text":"The petitioner, residing at 96, MG Road, Bengaluru 560001, has filed this writ petition.","entities":[{"type":"ADDRESS","value":"96, MG Road, Bengaluru 560001"}],"tags":["address","legal"]}

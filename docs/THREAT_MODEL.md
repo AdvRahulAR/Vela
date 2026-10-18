@@ -53,7 +53,7 @@ Vela sits between an application and an LLM provider. On the way out, it detects
 
 These are deliberate limits. Users should know them before relying on Vela.
 
-1. **Detection is not complete.** Without an NER service, names and addresses are found by heuristics and are missed in Indian scripts, for rare names and in free-form addresses. On the project's small labelled corpus (80 cases), 10 of 13 names and 5 of 7 addresses are found, and every structured identifier is; the corpus is a regression gate, not a recall estimate. An undetected value is sent as-is.
+1. **Detection is not complete.** Without an NER service, names and addresses are found by heuristics and are missed in Indian scripts, for rare names and in free-form addresses. See docs/DETECTION_REPORT.md for per-type recall with confidence intervals on the synthetic corpus (an upper bound), and `npm run eval` for the hand-labelled misses. An undetected value is sent as-is.
 2. **Format-preserving encryption reveals format.** By design, the provider can see:
    - the length and separators of every encrypted value
    - a card's brand digit

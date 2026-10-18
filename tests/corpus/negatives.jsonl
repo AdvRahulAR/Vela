@@ -13,3 +13,5 @@
 {"text":"The quick brown fox jumps over the lazy dog.","entities":[],"tags":["prose"]}
 {"text":"नमस्ते, आप कैसे हैं? 你好，谢谢 🙂","entities":[],"tags":["unicode"]}
 {"text":"see ./rahul.txt and rahul_sharma.log","entities":[],"tags":["code","paths"]}
+{"text":"Meeting at Hotel Patel tomorrow, then lunch at Gupta Stores.","entities":[],"tags":["negative","surname-business"]}
+{"text":"invoice number 9876543210 hai, please check","entities":[],"tags":["negative","hinglish"]}
