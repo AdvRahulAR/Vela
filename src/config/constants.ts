@@ -38,7 +38,7 @@ export const STANDARD_ENTITY_TYPES: ReadonlySet<EntityType> = new Set<StandardEn
   'SECRET_KEY', 'JWT', 'MAC_ADDRESS', 'PERSON', 'LOCATION', 'ORG', 'CUSTOM',
 ]);
 
-export const PACKAGE_VERSION = '0.4.1';
+export const PACKAGE_VERSION = '0.5.0';
 
 export const DIGITS = '0123456789';
 export const UPPER_ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';

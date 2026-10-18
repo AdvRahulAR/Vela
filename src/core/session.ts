@@ -3,7 +3,9 @@ import { STANDARD_ENTITY_TYPES } from '../config/constants.js';
 import { detectPii, nameComponents, type DetectOptions } from './detector.js';
 import type { FpeMasker } from './fpe.js';
 import { personComponents } from './names.js';
-import { VelaInputTooLargeError, VelaNotPreparedError, VelaRecognizerError } from './errors.js';
+import { VelaInputTooLargeError, VelaNotPreparedError, VelaPolicyBlockedError, VelaRecognizerError } from './errors.js';
+import { invalidateCheck } from './fpe.js';
+import type { EntityAction } from './policy.js';
 import { Restorer, type RestoreField, type RestoreOptions, type StreamRestorer } from './matcher.js';
 import { fieldForKey } from './streaming.js';
 import type {
@@ -44,6 +46,9 @@ export interface SessionEngine {
   onRecognizerFailure?: (err: unknown) => void;
   /** Per-field restore policy ('restore' unless set). */
   restore?: RestorePolicy;
+  /** Per-type actions from a policy; they override fpeTypes/tokenTypes. */
+  actions?: Record<string, EntityAction>;
+  policyId?: string;
 }
 
 /** Whether placeholders in each part of a response are restored or left as placeholders. */
@@ -406,14 +411,18 @@ export class MaskSession {
     const fpeMap: Record<string, string> = {};
     for (const r of this.byMasked.values()) {
       if (r.method === 'token') mapping[r.masked] = r.original;
-      else fpeMap[r.original] = r.masked;
+      else if (r.method === 'fpe') fpeMap[r.original] = r.masked;
     }
     return { text, mapping, fpeMap, entities: this.entities, replacements: this.replacements };
   }
 
+  private restorerBuiltFor = -1;
+
+  /** Restorer over every replacement except redactions, which are never restored. */
   private getRestorer(): Restorer {
-    if (!this.restorer || this.restorer.size !== this.byMasked.size) {
-      this.restorer = new Restorer(this.replacements);
+    if (!this.restorer || this.restorerBuiltFor !== this.byMasked.size) {
+      this.restorer = new Restorer(this.replacements.filter((r) => r.method !== 'redact'));
+      this.restorerBuiltFor = this.byMasked.size;
     }
     return this.restorer;
   }
@@ -429,8 +438,11 @@ export class MaskSession {
     const existing = this.byOriginal.get(key);
     if (existing) return existing.masked;
 
-    const wantsFpe = this.engine.fpeTypes.includes(e.type);
-    const wantsToken = this.engine.tokenTypes.includes(e.type);
+    const action = this.engine.actions?.[e.type];
+    if (action === 'block') throw new VelaPolicyBlockedError(`policy "${this.engine.policyId ?? 'custom'}" blocks ${e.type}`, 422);
+    if (action === 'allow') return null;
+    const wantsFpe = action ? action === 'fpe' || action === 'fpe-synthetic' : this.engine.fpeTypes.includes(e.type);
+    const wantsToken = action !== undefined || this.engine.tokenTypes.includes(e.type);
     if (!wantsFpe && !wantsToken && STANDARD_ENTITY_TYPES.has(e.type)) return null;
 
     // Partial mention of a known person ("Joseph" after "Joseph Mathew"): reuse that placeholder.
@@ -446,13 +458,16 @@ export class MaskSession {
 
     let rep: Replacement | null = null;
     if (wantsFpe) {
-      const c = this.engine.fpe.encryptEntity(e.type, e.value, this.seed, e.metadata);
+      let c = this.engine.fpe.encryptEntity(e.type, e.value, this.seed, e.metadata);
+      if (c && action === 'fpe-synthetic') c = invalidateCheck(e.type, c);
       if (c && c !== e.value && !this.byMasked.has(c) && !text.includes(c)) {
         rep = { masked: c, original: e.value, type: e.type, method: 'fpe' };
       }
     }
     // Fail closed: anything that could not be format-preserved becomes a token.
-    if (!rep) rep = { masked: this.nextToken(e.type, text), original: e.value, type: e.type, method: 'token' };
+    if (!rep) {
+      rep = { masked: this.nextToken(e.type, text), original: e.value, type: e.type, method: action === 'redact' ? 'redact' : 'token' };
+    }
 
     this.byOriginal.set(key, rep);
     this.byMasked.set(rep.masked, rep);

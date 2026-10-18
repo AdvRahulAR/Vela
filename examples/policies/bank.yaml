@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../../schemas/vela-policy.schema.json
+#
+# Example policy for an Indian bank's internal assistant. Start from the
+# india-bfsi preset (`vela policy india-bfsi`) and adapt it with your DPO.
+id: acme-bank-assistant
+version: 3
+description: Internal assistant for relationship managers. Approved by DPO on 2026-10-01.
+packs: [pci, india-bfsi]
+entities:
+  CREDIT_CARD: block        # PCI: card numbers never leave
+  CARD_CVV: block
+  CARD_TRACK_DATA: block
+  CARD_EXPIRY: redact
+  SECRET_KEY: block
+  JWT: block
+  AADHAAR: fpe-synthetic    # structure kept, but can't be a real Aadhaar
+  DATE_OF_BIRTH: redact     # never restored
+  ORG: allow                # company names are needed for credit notes
+providers:
+  allow: ["*.openai.azure.com", "bedrock-runtime.ap-south-1.amazonaws.com"]
+models:
+  allow: ["gpt-4.1*", "anthropic.claude-*"]
+nonText: block
+restore:
+  toolArguments: placeholders
+ner:
+  required: true            # start the proxy with --presidio-url

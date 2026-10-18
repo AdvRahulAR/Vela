@@ -226,3 +226,32 @@ export async function maskFieldsAsync<T extends Record<string, unknown>>(session
   }
   return session.maskResidual(out) as T;
 }
+
+/** Content-part types that carry text Vela masks (everything else is non-text). */
+const TEXT_PART_TYPES = new Set([
+  'text', 'input_text', 'output_text', 'tool_use', 'server_tool_use', 'tool_result', 'thinking', 'redacted_thinking',
+  'function_call', 'function_call_output', 'message', 'reasoning', 'refusal', 'search_result',
+  'web_search_tool_result', 'web_fetch_tool_result', 'code_execution_tool_result',
+]);
+/** Keys that mark an object as a content part rather than a setting such as `{ type: 'auto' }`. */
+const PART_KEYS = ['content', 'source', 'image_url', 'input_audio', 'file', 'file_id', 'file_data', 'file_url', 'text'];
+
+/**
+ * Types of non-text content (images, audio, files, non-text documents) in a
+ * request, for the `nonText: 'block'` policy. Empty when there are none.
+ */
+export function findNonText(body: unknown): string[] {
+  const found = new Set<string>();
+  const visit = (v: unknown): void => {
+    if (Array.isArray(v)) return v.forEach(visit);
+    if (!v || typeof v !== 'object') return;
+    const o = v as Json;
+    if (typeof o.type === 'string' && PART_KEYS.some((k) => k in o)) {
+      const textDoc = o.type === 'document' && o.source?.type === 'text';
+      if (!TEXT_PART_TYPES.has(o.type) && !textDoc) found.add(o.type);
+    }
+    for (const x of Object.values(o)) if (x && typeof x === 'object') visit(x);
+  };
+  visit(body);
+  return [...found];
+}

@@ -6,8 +6,8 @@ Security fixes go into the latest minor release line. While the package is 0.x, 
 
 | Version | Supported |
 |---|---|
-| 0.4.x | Yes |
-| < 0.4 | No |
+| 0.5.x | Yes |
+| < 0.5 | No |
 
 ## Reporting a vulnerability
 

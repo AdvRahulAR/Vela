@@ -8,7 +8,8 @@ import {
   type RestoreSource,
 } from '../core/streaming.js';
 import { maskLlmRequest, maskLlmRequestAsync } from './formats.js';
-import { fieldsMethod, guardClient } from './wrap-util.js';
+import { baseUrlOf, fieldsMethod, guardClient } from './wrap-util.js';
+import { enforceRequestPolicy } from './gateway.js';
 import type { MaskResult, OpenAIRequest, OpenAIResponse, SessionOptions } from '../types.js';
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -47,7 +48,7 @@ export async function maskOpenAiRequestAsync(
   opts: SessionOptions & { session?: MaskSession } = {},
 ): Promise<{ payload: OpenAIRequest; results: MaskResult[]; session: MaskSession }> {
   const session = opts.session ?? vela.createSession(opts);
-  const payload = await maskLlmRequestAsync(session, 'openai-chat', request);
+    const payload = await maskLlmRequestAsync(session, 'openai-chat', request);
   return { payload, results: [session.toResult()], session };
 }
 
@@ -58,7 +59,7 @@ export async function maskOpenAiResponsesRequestAsync<T extends object>(
   opts: SessionOptions & { session?: MaskSession } = {},
 ): Promise<{ payload: T; results: MaskResult[]; session: MaskSession }> {
   const session = opts.session ?? vela.createSession(opts);
-  const payload = await maskLlmRequestAsync(session, 'openai-responses', request);
+    const payload = await maskLlmRequestAsync(session, 'openai-responses', request);
   return { payload, results: [session.toResult()], session };
 }
 
@@ -166,6 +167,7 @@ export function wrapOpenAiClient<T extends OpenAICompatibleClient>(client: T, ve
   };
   const chatMethod = (original: Fn) => async (params: OpenAIRequest, ...rest: unknown[]) => {
     const session = sessionFor(params);
+    enforceRequestPolicy(vela, baseUrlOf(client), params);
     const payload = await maskLlmRequestAsync(session, 'openai-chat', params);
     const result = await original(payload, ...rest);
     if (isAsyncIterable(result)) return wrapAsyncIterable(result, new OpenAiChatStreamUnmasker(session));
@@ -173,12 +175,13 @@ export function wrapOpenAiClient<T extends OpenAICompatibleClient>(client: T, ve
   };
   const responsesMethod = (original: Fn) => async (params: Json, ...rest: unknown[]) => {
     const session = sessionFor(params);
+    enforceRequestPolicy(vela, baseUrlOf(client), params);
     const payload = await maskLlmRequestAsync(session, 'openai-responses', params);
     const result = await original(payload, ...rest);
     if (isAsyncIterable(result)) return wrapAsyncIterable(result, new ResponsesStreamUnmasker(session));
     return session.unmaskValue(result);
   };
-  const fields = (f: string[]) => fieldsMethod(vela, f, (p) => resolveSessionId(opts.sessionId, p));
+  const fields = (f: string[]) => fieldsMethod(vela, f, (p) => resolveSessionId(opts.sessionId, p), baseUrlOf(client));
 
   return guardClient(
     client,

@@ -7,11 +7,11 @@ npm ci
 npm run build
 ```
 
-Node 18.19 or newer is needed to run the tests. Use Node 22 for coverage.
+Node 22 or newer is needed (Node 18 and 20 are end-of-life).
 
 ## Checks
 
-Run all of these before opening a pull request. CI runs the same steps on Node 18, 20, 22 and 24 (Linux) and Node 22 (Windows).
+Run all of these before opening a pull request. CI runs the same steps on Node 22 and 24 (Linux) and Node 22 (Windows).
 
 | Command | What it does |
 |---|---|

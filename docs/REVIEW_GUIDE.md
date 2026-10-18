@@ -4,7 +4,7 @@ This guide is for an independent reviewer of vela-privacy. It lists the code in 
 
 ## Getting started
 
-Requires Node 18.19 or newer (Node 22 recommended).
+Requires Node 22 or newer.
 
 ```bash
 git clone https://github.com/AdvRahulAR/Vela.git && cd Vela

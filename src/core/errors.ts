@@ -66,3 +66,14 @@ export class VelaAuditError extends VelaError {
     this.cause = cause;
   }
 }
+
+/**
+ * The masking policy rejected the request: a blocked entity type (422), a
+ * provider or model not on the allowlist (403), or non-text content (422).
+ * The message names types and rules, never values. Nothing was sent.
+ */
+export class VelaPolicyBlockedError extends VelaError {
+  constructor(reason: string, status = 403) {
+    super(`Vela policy: ${reason}; nothing was sent upstream`, status);
+  }
+}

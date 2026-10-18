@@ -1,0 +1,7 @@
+{"text":"NRIC S1234567D on file","entities":[{"type":"SG_NRIC","value":"S1234567D"}]}
+{"text":"Emirates ID 784-1234-1234567-2","entities":[{"type":"AE_EMIRATES_ID","value":"784-1234-1234567-2"}]}
+{"text":"CPF 529.982.247-25 do cliente","entities":[{"type":"BR_CPF","value":"529.982.247-25"}]}
+{"text":"SIN 046 454 286 provided","entities":[{"type":"CA_SIN","value":"046 454 286"}]}
+{"text":"TFN 123 456 782 lodged","entities":[{"type":"AU_TFN","value":"123 456 782"}]}
+{"text":"NRIC S1234567A is not valid","entities":[]}
+{"text":"CPF 111.111.111-11 is a dummy","entities":[]}

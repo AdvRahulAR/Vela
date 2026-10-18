@@ -7,6 +7,7 @@ export {
   VelaNotPreparedError,
   VelaRouteBlockedError,
   VelaAuditError,
+  VelaPolicyBlockedError,
 } from './core/errors.js';
 export {
   consoleSink,
@@ -31,7 +32,33 @@ export {
   AnthropicStreamUnmasker,
   ResponsesStreamUnmasker,
 } from './core/streaming.js';
-export { detectPii, type DetectOptions } from './core/detector.js';
+export { detectPii, type DetectOptions, type DetectorPattern, type ContextRule } from './core/detector.js';
+
+// Key providers
+export {
+  envKeyProvider,
+  envelopeKeyProvider,
+  awsKmsKeyProvider,
+  azureKeyVaultKeyProvider,
+  gcpKmsKeyProvider,
+  vaultTransitKeyProvider,
+  type KeyProvider,
+  type ProvidedKey,
+} from './core/keys.js';
+
+// Policy and detector packs
+export {
+  loadPolicy,
+  validatePolicy,
+  policyHash,
+  VelaPolicyError,
+  ENTITY_ACTIONS,
+  type VelaPolicy,
+  type EntityAction,
+} from './core/policy.js';
+export { POLICY_PRESETS, resolvePolicy } from './policies/presets.js';
+export { DETECTOR_PACKS, resolvePacks } from './packs/index.js';
+export { invalidateCheck } from './core/fpe.js';
 
 // Algorithms
 export { validateVerhoeff, generateVerhoeffChecksum } from './core/algorithms/verhoeff.js';
@@ -67,7 +94,7 @@ export {
   type RouteClass,
 } from './integrations/formats.js';
 export { presidioRecognizer, codePointToUtf16Index, type PresidioRecognizerOptions } from './integrations/presidio.js';
-export { forwardLlmRequest, forwardFieldsRequest, REQUEST_ID_HEADER } from './integrations/gateway.js';
+export { forwardLlmRequest, forwardFieldsRequest, enforceRequestPolicy, REQUEST_ID_HEADER } from './integrations/gateway.js';
 export { createFetchInterceptor } from './integrations/fetch.js';
 export { createExpressMiddleware } from './integrations/express.js';
 export { runProxy } from './integrations/proxy.js';

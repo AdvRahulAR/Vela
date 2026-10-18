@@ -1,12 +1,13 @@
 import type { Vela } from '../core/vela.js';
 import { createSseTransformer } from '../core/streaming.js';
 import { SESSION_HEADER } from '../config/constants.js';
-import { VelaAuditError, VelaError } from '../core/errors.js';
+import { VelaAuditError, VelaError, VelaPolicyBlockedError, VelaRouteBlockedError } from '../core/errors.js';
+import { globMatch } from '../core/policy.js';
 import { newRequestId, type AuditEvent } from '../core/audit.js';
 import type { MaskSession } from '../core/session.js';
 import { PACKAGE_VERSION } from '../config/constants.js';
 import { Logger } from '../utils/logger.js';
-import { detectApiFormat, maskFieldsAsync, maskLlmRequestAsync } from './formats.js';
+import { detectApiFormat, findNonText, maskFieldsAsync, maskLlmRequestAsync } from './formats.js';
 
 const STRIP_REQUEST_HEADERS = [
   'host',
@@ -21,6 +22,7 @@ const STRIP_REQUEST_HEADERS = [
   'proxy-connection',
   'accept-encoding',
   SESSION_HEADER,
+  'x-vela-key',
 ];
 const STRIP_RESPONSE_HEADERS = ['content-encoding', 'content-length', 'transfer-encoding', 'connection', 'keep-alive'];
 
@@ -102,7 +104,8 @@ export class AuditTrail {
   /** The request was stopped by an error (never records the message). */
   error(err: unknown): void {
     const status = err instanceof VelaError ? err.status : 502;
-    const kind = status === 403 ? 'vela.blocked' : 'vela.error';
+    // Route and policy rejections are decisions, not failures.
+    const kind = err instanceof VelaRouteBlockedError || err instanceof VelaPolicyBlockedError ? 'vela.blocked' : 'vela.error';
     this.final({ event: kind, status, error_type: err instanceof Error ? err.name : 'Error', latency_ms: Date.now() - this.started });
   }
 
@@ -176,6 +179,7 @@ export async function forwardLlmRequest(vela: Vela, req: ForwardRequest, opts: F
   const session = vela.createSession(sessionOptions(sessionId, opts.tenant));
   let upstream: Response;
   try {
+    enforceRequestPolicy(vela, req.url, body);
     const payload = await maskLlmRequestAsync(session, format, body);
     await trail.request(session);
 
@@ -234,6 +238,28 @@ export async function forwardLlmRequest(vela: Vela, req: ForwardRequest, opts: F
 function sessionOptions(sessionId: string | undefined, tenant: string | undefined): { sessionId?: string } {
   if (!sessionId) return {};
   return { sessionId: tenant ? `${tenant}\u0000${sessionId}` : sessionId };
+}
+
+/**
+ * Request-level policy checks, before any masking: provider and model
+ * allowlists and non-text content. Throws VelaPolicyBlockedError.
+ */
+export function enforceRequestPolicy(vela: Vela, url: string | undefined, body: Record<string, unknown>): void {
+  const policy = vela.policy;
+  if (!policy) return;
+  const u = url ? new URL(url) : undefined;
+  if (policy.providers && !u) throw new VelaPolicyBlockedError('upstream URL unknown, so providers.allow cannot be checked', 403);
+  if (u && policy.providers && !policy.providers.allow.some((p) => globMatch(p, u.host) || globMatch(p, u.hostname) || globMatch(p, u.origin))) {
+    throw new VelaPolicyBlockedError(`upstream ${u.host} is not in providers.allow`, 403);
+  }
+  if (policy.models) {
+    const model = typeof body.model === 'string' ? body.model : '';
+    if (!policy.models.allow.some((p) => globMatch(p, model))) throw new VelaPolicyBlockedError(`model "${safeModel(model) ?? ''}" is not in models.allow`, 403);
+  }
+  if (policy.nonText === 'block') {
+    const kinds = findNonText(body);
+    if (kinds.length) throw new VelaPolicyBlockedError(`non-text content (${kinds.join(', ')}) is blocked`, 422);
+  }
 }
 
 /** Record a request that was rejected before Vela tried to mask it (a blocked route). */
@@ -301,6 +327,7 @@ export async function forwardFieldsRequest(
   const session = vela.createSession(sessionOptions(sessionId, opts.tenant));
   let upstream: Response;
   try {
+    enforceRequestPolicy(vela, req.url, parsed);
     const payload = await maskFieldsAsync(session, fields, parsed);
     await trail.request(session);
     const headers = upstreamHeaders(req.headers, opts.apiKey, new URL(req.url).hostname === 'api.anthropic.com');

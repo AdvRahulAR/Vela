@@ -5,6 +5,9 @@ import { MaskSession, type SessionEngine } from './session.js';
 import { Restorer, replacementsFrom, type RestoreOptions, type StreamRestorer } from './matcher.js';
 import { Logger } from '../utils/logger.js';
 import type { AuditSink } from './audit.js';
+import type { KeyProvider } from './keys.js';
+import { resolvePacks } from '../packs/index.js';
+import { VelaPolicyError, policyHash, validatePolicy, type VelaPolicy } from './policy.js';
 import type { MaskResult, SessionOptions, UnmaskResult, VelaConfig } from '../types.js';
 
 /**
@@ -24,7 +27,16 @@ export class Vela {
   /** Static fields copied into every audit event (policy id and hash, key id). */
   readonly auditContext: { policy_id?: string; policy_hash?: string; key_id?: string };
 
+  /** The validated policy, if one was configured. */
+  readonly policy: VelaPolicy | undefined;
+
   constructor(config: VelaConfig = {}) {
+    const policy = config.policy ? validatePolicy(config.policy) : undefined;
+    if (policy?.ner?.required) {
+      if (!config.asyncRecognizers?.length) throw new VelaPolicyError(`policy "${policy.id}" requires an NER service (asyncRecognizers)`);
+      if (config.recognizerFailure === 'continue') throw new VelaPolicyError(`policy "${policy.id}" requires recognizerFailure: 'block'`);
+    }
+    this.policy = policy;
     // No key supplied: masking only needs a secret, random key — the maps kept
     // in each session are what restore values, not decryption.
     const key = config.fpeKey ?? new Uint8Array(randomBytes(32));
@@ -39,18 +51,35 @@ export class Vela {
         recognizers: config.recognizers ?? [],
         detectNames: config.detectNames ?? true,
         maskCitationParties: config.maskCitationParties ?? false,
+        packs: resolvePacks([...new Set([...(config.packs ?? []), ...(policy?.packs ?? [])])]),
       },
       maxInputChars: config.maxInputChars ?? 2_000_000,
       asyncRecognizers: config.asyncRecognizers ?? [],
       recognizerFailure: config.recognizerFailure ?? 'block',
       recognizerTimeoutMs: config.recognizerTimeoutMs ?? 5000,
-      ...(config.restore ? { restore: config.restore } : {}),
+      ...(config.restore ?? policy?.restore ? { restore: { ...policy?.restore, ...config.restore } } : {}),
+      ...(policy?.entities ? { actions: policy.entities, policyId: policy.id } : {}),
       onRecognizerFailure: (err) =>
         this.logger.warn('recognizer_failed_continuing', { error: err instanceof Error ? err.message : String(err) }),
     };
     this.logger = new Logger('vela-core', config.enableLogging ?? false);
     this.audit = config.audit;
-    this.auditContext = { ...(config.keyId ? { key_id: config.keyId } : {}) };
+    this.auditContext = {
+      ...(policy ? { policy_id: policy.id, policy_hash: policyHash(policy) } : {}),
+      ...(config.keyId ? { key_id: config.keyId } : {}),
+    };
+  }
+
+  /**
+   * Create a Vela whose FF1 key comes from a key provider (KMS, Vault,
+   * environment). The provider's key id is recorded in audit events.
+   *
+   *   const vela = await Vela.create({ keyProvider: awsKmsKeyProvider({ … }), audit: jsonlFileSink('audit.jsonl') });
+   */
+  static async create(config: VelaConfig & { keyProvider: KeyProvider }): Promise<Vela> {
+    const { keyProvider, ...rest } = config;
+    const { key, keyId } = await keyProvider.getKey();
+    return new Vela({ ...rest, fpeKey: key, keyId: rest.keyId ?? keyId });
   }
 
   /**

@@ -1,6 +1,6 @@
 # Threat model
 
-This document states what vela-privacy protects, against whom, and where its protection stops. It applies to version 0.4.1.
+This document states what vela-privacy protects, against whom, and where its protection stops. It applies to version 0.5.
 
 ## What Vela does
 
@@ -42,7 +42,11 @@ Vela sits between an application and an LLM provider. On the way out, it detects
 - **No cross-session linkability by default.** Without a shared `sessionId`, each session uses a random FF1 tweak, so the same value encrypts differently across sessions. Tweaks are also separated per entity type.
 - **Fail closed on routes Vela can't mask.** The proxy masks Chat Completions, Responses (and `input_tokens`), Messages (and `count_tokens`), embeddings, moderations and legacy completions. Body-free requests pass; every other body-carrying route is rejected (HTTP 403, `VelaRouteBlockedError`) unless the operator sets `passthrough: 'all'`. The fetch interceptor applies the same rule on provider hosts and refuses to send an LLM request whose body it can't read as JSON. The client wrappers mask the text methods and throw on the rest (batches, files, `stream()` helpers).
 - **Fail closed on infrastructure errors.** If an async recognizer fails or times out, the request is rejected (HTTP 503) unless `recognizerFailure: 'continue'` is set. If a single text exceeds `maxInputChars`, the request is rejected (HTTP 413). In both cases nothing is sent upstream.
-- **No values in logs.** The logger records counts and timings only.
+- **Unknown fields are masked too.** After the format-aware walk, a residual pass masks any detected value in a string field Vela didn't know was text (`user`, `metadata`, message `name`, future API fields). Identifiers and opaque blobs (`model`, `id`, `signature`, base64 `data`) are skipped.
+- **Policy decisions fail closed.** A `block` action, a provider or model outside the policy's allowlist, or blocked non-text content rejects the request before anything is sent. Unknown policy keys and actions are errors.
+- **Audit evidence.** With an audit sink, each request records a value-free event before forwarding. If that write fails, the request is rejected. `jsonlFileSink` hash-chains events so tampering is detectable (not preventable: protect the file and ship it to write-once storage).
+- **Proxy access.** The proxy refuses a non-loopback bind without client tokens unless `insecure` is set. Tokens are compared in constant time, and a tenant's session ids are bound to the tenant.
+- **No values in logs.** The logger and audit events record counts, types and timings only.
 - **Linear-time detection.** Every detector regex is tested against adversarial input, and detection time grows linearly with input size.
 
 ## Non-guarantees
@@ -56,11 +60,14 @@ These are deliberate limits. Users should know them before relying on Vela.
    - a PAN's holder-type letter
    - a GSTIN's state code
    - a phone number's country code
+
+   By default the output also passes the type's checksum, so it may equal a real third party's identifier. The `fpe-synthetic` policy action makes the check character invalid (Aadhaar, card, GSTIN, IBAN) at the cost of structural validity.
 3. **Placeholders reveal type and count.** `[PERSON_3]` tells the provider there are at least three people and which mentions refer to the same one.
 4. **Within one session, values are linkable.** A repeated value gets the same ciphertext or placeholder for the whole session. With a shared `sessionId`, that holds across requests.
 5. **Partial-name linking restores the full name.** "Joseph" after "Joseph Mathew" shares the full name's placeholder and comes back as "Joseph Mathew". Turn this off with `linkPartialNames: false`.
 6. **Placeholder-shaped text across separate calls.** Within one `mask`/`maskValue` call or one request, literal text that looks like a placeholder (`[EMAIL_3]`) is reserved and can't collide. If a *later*, separate `mask()` call in the same session contains a literal equal to a placeholder issued earlier, restoration of the model's echo of it returns the earlier original. No data leaks upstream, but the restored text is wrong.
-7. **Context outside text fields is not masked.** Images, audio, file attachments and non-text content blocks pass through unchanged.
+7. **Context outside text fields is not masked.** Images, audio, file attachments and non-text content blocks pass through unchanged, unless the policy sets `nonText: block`, which rejects them.
+8. **Thinking blocks and signatures.** Masking previous turns' thinking text (as the residual pass does) changes text that the provider signed, which some providers reject. Use `restore: { thinking: 'placeholders' }` with multi-turn extended thinking, so the masked thinking the provider produced is what goes back.
 
 ## Restoration risk (for the reviewer)
 
@@ -72,17 +79,19 @@ Restoration turns placeholders in the **model's output** back into real values. 
 
 After restoration, the application receives a tool call whose URL contains the real email address. If the application executes tool calls automatically, the value leaves the trust boundary through the tool, not through the LLM provider.
 
-This is a property of any reversible masking scheme, not a defect in a specific code path, but it should be weighed in review. Mitigation options under consideration (not implemented):
+This is a property of any reversible masking scheme, not a defect in a specific code path. Since 0.5 it is mitigated:
 
-- an option to leave placeholders unrestored in tool-call arguments
-- a per-field restore allowlist (restore only `content` text, for example)
-- surfacing which placeholders were restored where, so the application can apply policy before executing a tool
+- `restore: { toolArguments: 'placeholders' }` leaves placeholders unrestored in tool-call arguments (streamed and non-streamed, OpenAI and Anthropic). Every policy preset sets it.
+- `restore` also covers `content` and `thinking`, per field.
+- `session.restoreReport` and the audit event's `restore` field count restored and kept placeholders per field.
 
-Until then, applications that auto-execute tool calls with network access should validate restored arguments before acting on them.
+Applications that need real values in tool arguments (and keep the default) should still validate restored arguments before executing a tool with network access.
 
 ## Operational recommendations
 
-- Bind the proxy to loopback (the default). If you must expose it, put authentication in front of it.
+- Bind the proxy to loopback (the default). To expose it, issue client tokens (`--auth-token-file`) and terminate TLS (`--tls-cert`/`--tls-key` or a sidecar).
+- Run with a policy (start from a preset) and an audit sink; ship the audit file to write-once storage and verify it with `vela audit verify`.
+- Keep the FPE key in a KMS (`Vela.create({ keyProvider })`).
 - Run an NER service inside the trust boundary and keep `recognizerFailure: 'block'`.
 - Use a fresh session per conversation; use a stable `sessionId` only when provider-side caching or conversation state requires it.
 - Keep a fixed `fpeKey` only when several processes must produce identical ciphertext. Otherwise the default random key per process is enough, because restoration uses the session map, not decryption.

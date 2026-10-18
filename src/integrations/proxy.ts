@@ -1,5 +1,7 @@
 import { VelaError, VelaRouteBlockedError } from '../core/errors.js';
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type RequestListener, type Server } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { Vela } from '../core/vela.js';
 import { DEFAULT_ANTHROPIC_URL, DEFAULT_PROXY_HOST, DEFAULT_PROXY_PORT, DEFAULT_UPSTREAM_URL, PACKAGE_VERSION } from '../config/constants.js';
 import { Logger } from '../utils/logger.js';
@@ -17,6 +19,44 @@ export function normalizePassthrough(p: ProxyServerOptions['passthrough']): 'saf
   if (p === true) return 'all';
   if (p === false) return 'none';
   return p ?? 'safe';
+}
+
+/** Header carrying a proxy client token (stripped before forwarding). */
+export const AUTH_HEADER = 'x-vela-key';
+
+const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
+
+const digest = (s: string): Buffer => createHash('sha256').update(s).digest();
+
+/** Constant-time token lookup: returns the tenant for a valid token. */
+function makeAuthenticator(tokens: Record<string, string>): (req: IncomingMessage) => string | null {
+  const entries = Object.entries(tokens).map(([token, tenant]) => ({ d: digest(token), tenant }));
+  return (req) => {
+    const raw = req.headers[AUTH_HEADER];
+    const given = typeof raw === 'string' ? raw : '';
+    if (!given) return null;
+    const d = digest(given);
+    let tenant: string | null = null;
+    // Compare against every token so timing doesn't reveal which one matched.
+    for (const e of entries) if (timingSafeEqual(d, e.d)) tenant = e.tenant;
+    return tenant;
+  };
+}
+
+/** Per-client token bucket: `perMinute` requests, refilled continuously. */
+function makeRateLimiter(perMinute: number): (client: string) => number {
+  const buckets = new Map<string, { tokens: number; at: number }>();
+  return (client) => {
+    const now = Date.now();
+    const b = buckets.get(client) ?? { tokens: perMinute, at: now };
+    b.tokens = Math.min(perMinute, b.tokens + ((now - b.at) / 60_000) * perMinute);
+    b.at = now;
+    buckets.set(client, b);
+    if (buckets.size > 10_000) buckets.delete(buckets.keys().next().value as string);
+    if (b.tokens < 1) return Math.ceil(((1 - b.tokens) / perMinute) * 60);
+    b.tokens -= 1;
+    return 0;
+  };
 }
 
 /**
@@ -37,12 +77,41 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
   const maxBody = opts.maxBodySizeBytes ?? 10 * 1024 * 1024;
   const logger = new Logger('vela-proxy', true);
   const passthrough = normalizePassthrough(opts.passthrough);
+  const authenticate = opts.authTokens && Object.keys(opts.authTokens).length ? makeAuthenticator(opts.authTokens) : null;
+  if (!authenticate && !LOOPBACK.has(host) && !opts.insecure) {
+    throw new VelaError(
+      `Refusing to listen on ${host} without authentication. Set authTokens (--auth-token-file), or insecure: true (--insecure) if something in front of Vela authenticates clients.`,
+      500,
+    );
+  }
+  const limit = opts.rateLimitPerMinute ? makeRateLimiter(opts.rateLimitPerMinute) : null;
 
-  const server = createServer(async (req, res) => {
+  const handler: RequestListener = async (req, res) => {
     const rawUrl = req.url ?? '/';
     const urlPath = rawUrl.split('?')[0] ?? '/';
+    const isHealth = req.method === 'GET' && (urlPath === '/health' || urlPath === '/');
 
-    if (req.method === 'GET' && (urlPath === '/health' || urlPath === '/')) {
+    let tenant: string | undefined;
+    if (authenticate && !isHealth) {
+      const t = authenticate(req);
+      if (t === null) {
+        req.resume();
+        sendJson(res, 401, { error: { message: `Missing or invalid ${AUTH_HEADER} header`, type: 'vela_unauthorized' } });
+        return;
+      }
+      tenant = t;
+    }
+    if (limit && !isHealth) {
+      const wait = limit(tenant ?? req.socket.remoteAddress ?? 'unknown');
+      if (wait > 0) {
+        req.resume();
+        res.setHeader('retry-after', String(wait));
+        sendJson(res, 429, { error: { message: 'Rate limit exceeded', type: 'vela_rate_limited' } });
+        return;
+      }
+    }
+
+    if (isHealth) {
       sendJson(res, 200, {
         status: 'healthy',
         service: 'vela-privacy-gateway',
@@ -62,7 +131,7 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
       req.resume();
       const err = new VelaRouteBlockedError(method, urlPath, route.reason);
       logger.warn('proxy_route_blocked', { method, urlPath });
-      auditBlocked(vela, method, upstreamFor(urlPath, req.headers) + urlPath, err);
+      auditBlocked(vela, method, upstreamFor(urlPath, req.headers) + urlPath, err, tenant);
       sendJson(res, err.status, { error: { message: err.message, type: 'vela_route_blocked' } });
       return;
     }
@@ -103,7 +172,7 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
       ...(body && route.kind !== 'safe' ? { body } : {}),
       signal: controller.signal,
     };
-    const fwdOpts = opts.apiKey ? { apiKey: opts.apiKey } : {};
+    const fwdOpts = { ...(opts.apiKey ? { apiKey: opts.apiKey } : {}), ...(tenant ? { tenant } : {}) };
     try {
       const response =
         route.kind === 'llm'
@@ -126,19 +195,21 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
       const msg = err instanceof Error ? err.message : 'Unknown proxy error';
       sendJson(res, 502, { error: { message: `Vela gateway proxy failure: ${msg}`, type: 'gateway_error' } });
     }
-  });
+  };
+  const server: Server = opts.tls ? (createHttpsServer({ cert: opts.tls.cert, key: opts.tls.key }, handler) as unknown as Server) : createServer(handler);
 
   server.listen(port, host, () => {
     const shown = host.includes(':') ? `[${host}]` : host;
     logger.info('server_started', { host, port, upstream });
     /* eslint-disable no-console -- operator-facing startup banner, independent of enableLogging */
-    console.log(`[vela] Privacy proxy active on http://${shown}:${port}`);
+    console.log(`[vela] Privacy proxy active on ${opts.tls ? 'https' : 'http'}://${shown}:${port}`);
+    if (authenticate) console.log(`[vela] Clients must send ${AUTH_HEADER}: <token>`);
     console.log(`[vela] Forwarding upstream to ${upstream}`);
     if (passthrough === 'all') {
       console.warn('[vela] WARNING: passthrough "all" forwards routes Vela cannot mask (batches, files, unknown endpoints) unmasked.');
     }
-    if (host === '0.0.0.0' || host === '::') {
-      console.warn('[vela] WARNING: listening on all interfaces — anyone who can reach this port can use it.');
+    if (!LOOPBACK.has(host) && !authenticate) {
+      console.warn('[vela] WARNING: listening beyond loopback with --insecure; anyone who can reach this port can use it.');
     }
     /* eslint-enable no-console */
   });

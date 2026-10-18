@@ -1,0 +1,8 @@
+{"text":"NI number AB 12 34 56 C on the payslip","entities":[{"type":"UK_NINO","value":"AB 12 34 56 C"}]}
+{"text":"NHS number 943 476 5919 registered","entities":[{"type":"UK_NHS","value":"943 476 5919"}]}
+{"text":"DNI 12345678Z y NIE X1234567L","entities":[{"type":"ES_DNI","value":"12345678Z"},{"type":"ES_DNI","value":"X1234567L"}]}
+{"text":"Codice fiscale RSSMRA85T10A562S","entities":[{"type":"IT_FISCAL_CODE","value":"RSSMRA85T10A562S"}]}
+{"text":"Steuer-ID 12 345 678 901 bitte","entities":[{"type":"DE_TAX_ID","value":"12 345 678 901"}]}
+{"text":"NIR 1 85 05 78 006 084 91","entities":[{"type":"FR_NIR","value":"1 85 05 78 006 084 91"}]}
+{"text":"NHS number 943 476 5918 is mistyped","entities":[]}
+{"text":"DNI 12345678A is invalid","entities":[]}

@@ -115,6 +115,12 @@ export interface VelaConfig {
   recognizerFailure?: 'block' | 'continue';
   /** Timeout for one async recognizer call, in milliseconds. Default: 5000. */
   recognizerTimeoutMs?: number;
+  /**
+   * Detector packs to enable: 'pci' (CVV, expiry, track data), 'india-bfsi'
+   * (CKYC, UAN, demat, CIN, DIN, TAN, LEI, MICR, SWIFT, vehicle registration),
+   * 'health-in' (ABHA, MRN/UHID), 'us', 'eu-uk', 'intl'. See `DETECTOR_PACKS`.
+   */
+  packs?: string[];
   /** Extra recognizers (e.g. NER models) run alongside the built-in detectors. */
   recognizers?: EntityRecognizer[];
   /**
@@ -149,6 +155,13 @@ export interface VelaConfig {
    * forwarding, the request is rejected (HTTP 503) and nothing is sent.
    */
   audit?: import('./core/audit.js').AuditSink;
+  /**
+   * Declarative masking policy (see `loadPolicy()` and `POLICY_PRESETS`):
+   * per-entity actions (fpe, fpe-synthetic, token, redact, block, allow),
+   * provider and model allowlists, non-text content, restore policy, NER
+   * requirement and detector packs. Its id and hash go into audit events.
+   */
+  policy?: import('./core/policy.js').VelaPolicy;
   /** Identifier of the FPE key, recorded in audit events (never the key itself). */
   keyId?: string;
   /** Enable structured JSON logging. Default: false. */
@@ -179,7 +192,8 @@ export interface Replacement {
   /** The real value. */
   original: string;
   type: EntityType;
-  method: 'fpe' | 'token';
+  /** 'redact' placeholders are never restored. */
+  method: 'fpe' | 'token' | 'redact';
 }
 
 export interface MaskResult {
@@ -312,4 +326,16 @@ export interface ProxyServerOptions {
    * completions are always masked.
    */
   passthrough?: boolean | 'safe' | 'all' | 'none';
+  /**
+   * Client tokens, mapped to a tenant name. Clients send `x-vela-key: <token>`;
+   * the tenant is recorded in audit events and bound into session ids. Required
+   * to listen beyond loopback (unless `insecure`).
+   */
+  authTokens?: Record<string, string>;
+  /** Allow a non-loopback `host` without `authTokens` (only behind something that authenticates). */
+  insecure?: boolean;
+  /** Requests per minute per tenant (or client IP without auth). Excess gets HTTP 429. */
+  rateLimitPerMinute?: number;
+  /** Serve HTTPS with this certificate and key (PEM). */
+  tls?: { cert: string | Buffer; key: string | Buffer };
 }

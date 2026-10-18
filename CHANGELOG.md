@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased (0.5.0)
+## 0.5.0
+
+Compliance controls: policies, audit evidence, detector packs, synthetic-safe FPE, key providers and proxy hardening. Built from the findings in `docs/COMPLIANCE_AUDIT.md`.
+
+**Breaking**
+- Node 22 or newer is required (Node 18 and 20 are end-of-life).
+- `Replacement.method` can now be `'redact'`.
+- A non-loopback proxy `host` without `authTokens` throws unless `insecure: true` (CLI: `--insecure`). Previously it only warned.
+- Unknown string fields in requests (`user`, `metadata`…) are now masked by the residual pass (shipped in 0.4.1's second round).
+
+**Added**
+- **Policies** (`policy` option, `loadPolicy`, `validatePolicy`, `policyHash`, `POLICY_PRESETS`, `resolvePolicy`; CLI `--policy`, `vela policy`, `vela policies`):
+  - Policies are JSON or YAML.
+  - Per-entity actions: `fpe`, `fpe-synthetic`, `token`, `redact`, `block`, `allow`.
+  - Request rules: provider and model allowlists, `nonText: block`, restore policy, `ner.required` and detector packs.
+  - Unknown keys and actions are errors.
+  - Presets: `dpdp-baseline`, `india-bfsi`, `pci`, `hipaa-safe-harbor`, `gdpr-pseudonymise`.
+  - JSON Schema in `schemas/vela-policy.schema.json`; example in `examples/policies/bank.yaml`.
+  - New `yaml` dependency.
+- **Detector packs** (`packs` option, `DETECTOR_PACKS`; CLI `--packs`, `vela packs`): `pci`, `india-bfsi`, `health-in`, `us`, `eu-uk`, `intl`, each with corpus cases and a ReDoS check. `DetectorPattern` is exported for your own packs.
+- **Synthetic-safe FPE** (`fpe-synthetic`, `invalidateCheck`): Aadhaar, card, GSTIN and IBAN ciphertext with a deliberately invalid check character.
+- **Key providers** (`Vela.create({ keyProvider })`):
+  - `envKeyProvider`, `envelopeKeyProvider`, `awsKmsKeyProvider`, `azureKeyVaultKeyProvider`, `gcpKmsKeyProvider`, `vaultTransitKeyProvider`;
+  - duck-typed, so they add no dependencies;
+  - the key id goes into audit events.
+- **Proxy hardening:**
+  - client tokens (`authTokens`, `--auth-token-file`, header `x-vela-key`) with tenants;
+  - per-client rate limits (`rateLimitPerMinute`, `--rate-limit`);
+  - HTTPS (`tls`, `--tls-cert`/`--tls-key`);
+  - caller session ids bound to the tenant.
+- CLI: `vela audit verify <file>`, `--audit-log`, `--audit-stdout`.
 
 - **Audit events** (`audit` option, `jsonlFileSink`, `consoleSink`, `verifyAuditChain`):
   - Each request records a value-free `vela.request` event before anything is sent, and a `vela.response` event when the response completes. Blocked requests record `vela.blocked`, failed ones `vela.error`.

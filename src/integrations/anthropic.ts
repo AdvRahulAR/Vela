@@ -3,7 +3,8 @@ import type { MaskSession } from '../core/session.js';
 import { AnthropicStreamUnmasker, toRestoreSource } from '../core/streaming.js';
 import { maskLlmRequest, maskLlmRequestAsync } from './formats.js';
 import { wrapAsyncIterable, type WrapClientOptions } from './openai.js';
-import { fieldsMethod, guardClient } from './wrap-util.js';
+import { baseUrlOf, fieldsMethod, guardClient } from './wrap-util.js';
+import { enforceRequestPolicy } from './gateway.js';
 import type { MaskResult, SessionOptions } from '../types.js';
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -30,7 +31,7 @@ export async function maskAnthropicRequestAsync<T extends object>(
   opts: SessionOptions & { session?: MaskSession } = {},
 ): Promise<{ payload: T; results: MaskResult[]; session: MaskSession }> {
   const session = opts.session ?? vela.createSession(opts);
-  const payload = await maskLlmRequestAsync(session, 'anthropic-messages', request);
+    const payload = await maskLlmRequestAsync(session, 'anthropic-messages', request);
   return { payload, results: [session.toResult()], session };
 }
 
@@ -75,6 +76,7 @@ export function wrapAnthropicClient<T extends AnthropicCompatibleClient>(client:
   const messagesMethod = (original: Fn) => async (params: Json, ...rest: unknown[]) => {
     const id = sid(params);
     const session = vela.createSession(id !== undefined ? { sessionId: id } : {});
+    enforceRequestPolicy(vela, baseUrlOf(client), params);
     const payload = await maskLlmRequestAsync(session, 'anthropic-messages', params);
     const result = await original(payload, ...rest);
     if (result && typeof result === 'object' && Symbol.asyncIterator in result) {
@@ -89,7 +91,7 @@ export function wrapAnthropicClient<T extends AnthropicCompatibleClient>(client:
       'messages.countTokens': messagesMethod,
       'beta.messages.create': messagesMethod,
       'beta.messages.countTokens': messagesMethod,
-      'completions.create': fieldsMethod(vela, ['prompt'], sid),
+      'completions.create': fieldsMethod(vela, ['prompt'], sid, baseUrlOf(client)),
     },
     ANTHROPIC_REASONS,
   );

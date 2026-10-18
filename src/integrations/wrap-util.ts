@@ -1,6 +1,7 @@
 import type { Vela } from '../core/vela.js';
 import { VelaError, VelaRouteBlockedError } from '../core/errors.js';
 import { maskFieldsAsync } from './formats.js';
+import { enforceRequestPolicy } from './gateway.js';
 
 type Fn = (...args: any[]) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -45,10 +46,17 @@ export function guardClient<T extends object>(client: T, overrides: Record<strin
   return wrap(client, []) as T;
 }
 
+/** The client's base URL (OpenAI and Anthropic SDKs expose `baseURL`), for the providers allowlist. */
+export function baseUrlOf(client: unknown): string | undefined {
+  const u = (client as { baseURL?: unknown } | null)?.baseURL;
+  return typeof u === 'string' ? u : undefined;
+}
+
 /** A method whose top-level text fields (`input`, `prompt`) are masked and whose result is restored. */
-export function fieldsMethod(vela: Vela, fields: string[], sessionId: (p: Json) => string | undefined) {
+export function fieldsMethod(vela: Vela, fields: string[], sessionId: (p: Json) => string | undefined, baseUrl?: string) {
   return (original: Fn): Fn =>
     async (params: Json, ...rest: unknown[]) => {
+      enforceRequestPolicy(vela, baseUrl, params ?? {});
       if (params?.stream === true) throw new VelaError('Streaming is not supported for this method through Vela; nothing was sent', 400);
       const sid = sessionId(params);
       const session = vela.createSession(sid !== undefined ? { sessionId: sid } : {});

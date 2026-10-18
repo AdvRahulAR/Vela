@@ -1,0 +1,6 @@
+{"text":"Card 4111 1111 1111 1111, expiry 09/28, CVV 123","entities":[{"type":"CREDIT_CARD","value":"4111 1111 1111 1111"},{"type":"CARD_EXPIRY","value":"09/28"},{"type":"CARD_CVV","value":"123"}]}
+{"text":"security code: 4321 and valid thru 12 / 2027","entities":[{"type":"CARD_CVV","value":"4321"},{"type":"CARD_EXPIRY","value":"12 / 2027"}]}
+{"text":"swipe dump %B4111111111111111^SHARMA/RAHUL^2809101000000000000? captured","entities":[{"type":"CARD_TRACK_DATA","value":"%B4111111111111111^SHARMA/RAHUL^2809101000000000000?"}]}
+{"text":"track2 ;4111111111111111=28091010000000000? read","entities":[{"type":"CARD_TRACK_DATA","value":";4111111111111111=28091010000000000?"}]}
+{"text":"Meeting moved to 09/28 at room 123","entities":[]}
+{"text":"We shipped 123 units; expected 456 more","entities":[]}

@@ -13,7 +13,7 @@ import {
   isNameStopword,
 } from './names.js';
 
-interface ContextRule {
+export interface ContextRule {
   /** Must match the text preceding the match (within `window` chars). */
   require?: RegExp;
   /** Rejects the match if it matches the preceding text… */
@@ -23,7 +23,11 @@ interface ContextRule {
   window?: number;
 }
 
-interface PatternDef {
+/**
+ * A detector pattern: the same shape as Vela's built-in detectors, so packs get
+ * context rules, validators (checksums) and shrinking. `regex` must be global.
+ */
+export interface DetectorPattern {
   type: EntityType;
   regex: RegExp;
   confidence: number;
@@ -57,7 +61,7 @@ const STREET_SUFFIX =
   '(?:Road|Rd|Street|St|Marg|Nagar|Lane|Ln|Avenue|Ave|Colony|Layout|Cross|Main|Boulevard|Blvd|Drive|Highway|Hwy|Way|Place|Court|Circle|Enclave|Vihar|Bagh|Chowk|Gali|Peth|Puram|Halli|Palya|Extension|Ext)';
 const ADDRESS_TAIL = '(?:,\\s*[A-Z][\\w.\\-]*(?:\\s+[A-Z][\\w.\\-]*){0,2}){0,3}(?:,?\\s*-?\\s*(?:[1-9]\\d{2}\\s?\\d{3}|\\d{5}(?:-\\d{4})?)(?!\\d))?';
 
-const BUILTIN_PATTERNS: PatternDef[] = [
+const BUILTIN_PATTERNS: DetectorPattern[] = [
   // ── Secrets & credentials ────────────────────────────────────────────────
   {
     type: 'SECRET_KEY',
@@ -487,13 +491,15 @@ export interface DetectOptions {
    * "customer_name: "). Used for context cues only; never part of an entity.
    */
   prefix?: string;
+  /** Extra detector patterns (from detector packs), run with the built-ins. */
+  packs?: DetectorPattern[];
 }
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function runPattern(p: PatternDef, text: string, validateChecksums: boolean, found: DetectedEntity[]): void {
+function runPattern(p: DetectorPattern, text: string, validateChecksums: boolean, found: DetectedEntity[]): void {
   p.regex.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = p.regex.exec(text)) !== null) {
@@ -576,6 +582,7 @@ export function detectPii(text: string, options?: DetectOptions | string[]): Det
   const found: DetectedEntity[] = [];
 
   for (const p of BUILTIN_PATTERNS) runPattern(p, full, validate, found);
+  for (const p of opts.packs ?? []) runPattern(p, full, validate, found);
 
   for (const cd of opts.customDetectors ?? []) {
     runPattern(
