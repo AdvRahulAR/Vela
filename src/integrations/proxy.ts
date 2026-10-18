@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type RequestListener, type Server }
 import { createServer as createHttpsServer } from 'node:https';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { Vela } from '../core/vela.js';
-import { DEFAULT_ANTHROPIC_URL, DEFAULT_PROXY_HOST, DEFAULT_PROXY_PORT, DEFAULT_UPSTREAM_URL, PACKAGE_VERSION } from '../config/constants.js';
+import { DEFAULT_ANTHROPIC_URL, DEFAULT_GEMINI_URL, DEFAULT_PROXY_HOST, DEFAULT_PROXY_PORT, DEFAULT_UPSTREAM_URL, PACKAGE_VERSION } from '../config/constants.js';
 import { Logger } from '../utils/logger.js';
 import { classifyRoute, detectApiFormat } from './formats.js';
 import { auditBlocked, forwardFieldsRequest, forwardLlmRequest, forwardPassthrough, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
@@ -71,10 +71,13 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
   const upstream = (opts.upstream ?? DEFAULT_UPSTREAM_URL).replace(/\/+$/, '');
   // Without an explicit upstream, Anthropic requests (Messages paths, or any request carrying
   // Anthropic's headers, e.g. GET /v1/models from the Anthropic SDK) go to api.anthropic.com.
-  const upstreamFor = (path: string, headers: import('node:http').IncomingHttpHeaders): string =>
-    !opts.upstream && (detectApiFormat(path) === 'anthropic-messages' || headers['anthropic-version'] !== undefined)
-      ? DEFAULT_ANTHROPIC_URL
-      : upstream;
+  const upstreamFor = (path: string, headers: import('node:http').IncomingHttpHeaders): string => {
+    if (opts.upstream) return upstream;
+    const format = detectApiFormat(path);
+    if (format === 'anthropic-messages' || headers['anthropic-version'] !== undefined) return DEFAULT_ANTHROPIC_URL;
+    if (format === 'gemini' || headers['x-goog-api-key'] !== undefined) return DEFAULT_GEMINI_URL;
+    return upstream;
+  };
   const maxBody = opts.maxBodySizeBytes ?? 10 * 1024 * 1024;
   const logger = new Logger('vela-proxy', true);
   const passthrough = normalizePassthrough(opts.passthrough);

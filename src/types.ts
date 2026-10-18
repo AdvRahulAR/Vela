@@ -292,7 +292,7 @@ export interface OpenAIResponse {
   [key: string]: unknown;
 }
 
-export type LlmApiFormat = 'openai-chat' | 'openai-responses' | 'anthropic-messages';
+export type LlmApiFormat = 'openai-chat' | 'openai-responses' | 'anthropic-messages' | 'gemini' | 'bedrock-converse';
 
 export interface FetchInterceptorOptions {
   providers?: string[];

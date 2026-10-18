@@ -140,21 +140,31 @@ function sanitizeResponseHeaders(h: Headers): Headers {
   return out;
 }
 
-/** Headers for the upstream request: hop-by-hop and Vela headers removed, API key applied. */
-function upstreamHeaders(source: Headers, apiKey: string | undefined, anthropic: boolean): Headers {
+/** Headers for the upstream request: hop-by-hop and Vela headers removed, API key applied in the provider's style. */
+function upstreamHeaders(source: Headers, apiKey: string | undefined, provider: 'anthropic' | 'gemini' | 'openai'): Headers {
   const headers = new Headers(source);
   for (const k of STRIP_REQUEST_HEADERS) headers.delete(k);
   if (apiKey) {
-    if (anthropic) {
+    if (provider === 'anthropic') {
       headers.delete('authorization');
       headers.set('x-api-key', apiKey);
       if (!headers.has('anthropic-version')) headers.set('anthropic-version', '2023-06-01');
+    } else if (provider === 'gemini') {
+      headers.delete('authorization');
+      headers.set('x-goog-api-key', apiKey);
     } else {
       headers.set('authorization', `Bearer ${apiKey}`);
     }
   }
   return headers;
 }
+
+const providerOf = (format: string | null, url: URL): 'anthropic' | 'gemini' | 'openai' =>
+  format === 'anthropic-messages' || url.hostname === 'api.anthropic.com'
+    ? 'anthropic'
+    : format === 'gemini' || url.hostname.endsWith('googleapis.com')
+      ? 'gemini'
+      : 'openai';
 
 /** Restore a JSON (or plain-text) upstream body. */
 async function restoreBody(upstream: Response, session: { unmaskValue: <T>(v: T) => T; unmask: (t: string) => { text: string } }): Promise<string> {
@@ -188,7 +198,7 @@ export async function forwardLlmRequest(vela: Vela, req: ForwardRequest, opts: F
     const payload = await maskLlmRequestAsync(session, format, body);
     await trail.request(session);
 
-    const headers = upstreamHeaders(req.headers, opts.apiKey, format === 'anthropic-messages');
+    const headers = upstreamHeaders(req.headers, opts.apiKey, providerOf(format, new URL(req.url)));
     headers.set('content-type', 'application/json');
 
     upstream = await doFetch(req.url, {
@@ -334,7 +344,7 @@ export async function forwardFieldsRequest(
     enforceRequestPolicy(vela, req.url, parsed);
     const payload = await maskFieldsAsync(session, fields, parsed);
     await trail.request(session);
-    const headers = upstreamHeaders(req.headers, opts.apiKey, new URL(req.url).hostname === 'api.anthropic.com');
+    const headers = upstreamHeaders(req.headers, opts.apiKey, providerOf(null, new URL(req.url)));
     headers.set('content-type', 'application/json');
     upstream = await doFetch(req.url, {
       method: 'POST',
@@ -361,7 +371,7 @@ export async function forwardFieldsRequest(
 export async function forwardPassthrough(_vela: Vela, req: ForwardRequest, opts: ForwardOptions = {}): Promise<Response> {
   const doFetch = opts.fetchImpl ?? fetch;
   const url = new URL(req.url);
-  const headers = upstreamHeaders(req.headers, opts.apiKey, url.hostname === 'api.anthropic.com');
+  const headers = upstreamHeaders(req.headers, opts.apiKey, providerOf(null, url));
   const upstream = await doFetch(req.url, {
     method: req.method,
     headers,

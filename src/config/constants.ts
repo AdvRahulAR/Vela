@@ -52,6 +52,7 @@ export const DEFAULT_PROXY_HOST = '127.0.0.1';
 export const SESSION_HEADER = 'x-vela-session';
 export const DEFAULT_UPSTREAM_URL = 'https://api.openai.com';
 export const DEFAULT_ANTHROPIC_URL = 'https://api.anthropic.com';
+export const DEFAULT_GEMINI_URL = 'https://generativelanguage.googleapis.com';
 
 export const LLM_REQUEST_PATHS = [
   '/chat/completions',

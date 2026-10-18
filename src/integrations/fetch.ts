@@ -10,14 +10,19 @@ const KNOWN_PROVIDERS: Record<string, string[]> = {
   groq: ['api.groq.com'],
   together: ['api.together.xyz', 'api.together.ai'],
   ollama: ['localhost:11434', '127.0.0.1:11434'],
+  gemini: ['generativelanguage.googleapis.com'],
 };
 
 /**
  * Hosted LLM APIs. On these hosts every route is classified: maskable routes
  * are masked, body-free ones pass, and anything else is blocked (fail closed).
  */
-const PROVIDER_HOSTS = new Set(['api.openai.com', 'api.anthropic.com', 'api.groq.com', 'api.together.xyz', 'api.together.ai']);
-const PROVIDER_SUFFIXES = ['.openai.azure.com', '.services.ai.azure.com', '.cognitiveservices.azure.com'];
+const PROVIDER_HOSTS = new Set([
+  'api.openai.com', 'api.anthropic.com', 'api.groq.com', 'api.together.xyz', 'api.together.ai', 'generativelanguage.googleapis.com',
+]);
+const PROVIDER_SUFFIXES = ['.openai.azure.com', '.services.ai.azure.com', '.cognitiveservices.azure.com', '-aiplatform.googleapis.com'];
+/** Bedrock runtime endpoints (requests are SigV4-signed, so they can only be blocked here; see wrapBedrockClient). */
+const isBedrockHost = (h: string): boolean => /^bedrock-runtime(?:-fips)?\.[a-z0-9-]+\.amazonaws\.com$/.test(h);
 /** Lower-cased hostname without a trailing dot (`api.openai.com.` is the same host). */
 const normHost = (h: string): string => h.toLowerCase().replace(/\.$/, '');
 
@@ -44,7 +49,7 @@ export function createFetchInterceptor(vela: Vela, opts: FetchInterceptorOptions
   // Hosts the caller listed in `providers` get the same fail-closed route rules as the built-in ones.
   const isProviderHost = (url: URL): boolean => {
     const h = normHost(url.hostname);
-    return PROVIDER_HOSTS.has(h) || PROVIDER_SUFFIXES.some((s) => h.endsWith(s)) || hosts.has(h) || hosts.has(normHost(url.host));
+    return PROVIDER_HOSTS.has(h) || PROVIDER_SUFFIXES.some((s) => h.endsWith(s)) || isBedrockHost(h) || hosts.has(h) || hosts.has(normHost(url.host));
   };
   const targetMatches = (url: URL): boolean =>
     !opts.targetUrls || opts.targetUrls.some((p) => url.pathname.endsWith(p) || url.href.includes(p));

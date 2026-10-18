@@ -5,6 +5,24 @@ Lens: what a compliance buyer (a bank, NBFC, insurer, hospital, law firm or SaaS
 
 Regulatory references are for orientation and should be confirmed with counsel before they appear in sales material.
 
+## Status (updated for 0.5.0)
+
+| # | Finding | Status |
+|---|---|---|
+| F1 | Proxy passthrough fail-open | **Fixed in 0.4.1.** `classifyRoute()` masks or blocks every route; SDK wrappers are allowlists; residual masking pass |
+| F2 | Fetch interceptor sent unreadable bodies | **Fixed in 0.4.1.** Every body type is read; invalid JSON throws |
+| F3 | No audit evidence | **Fixed in 0.5.0.** Value-free, hash-chained audit events on every surface; fail closed before forwarding |
+| F4 | No policy layer | **Fixed in 0.5.0.** JSON/YAML policies, presets, allowlists, `block`/`redact`/`allow` |
+| F5 | Tool-call restoration | **Fixed in 0.5.0.** `restore.toolArguments: 'placeholders'`, restore report |
+| F6 | Thin detection evidence | **Improved.** About 2,400-entity synthetic corpus with confidence intervals (`docs/DETECTION_REPORT.md`). An independent, human-labelled benchmark is still open |
+| F7 | Checksum-valid ciphertext | **Fixed in 0.5.0.** `fpe-synthetic` action |
+| F8 | Proxy hardening | **Fixed in 0.5.0.** Client tokens, tenants, rate limits, TLS, loopback-only without auth |
+| F9 | Key management | **Fixed in 0.5.0.** KMS/Vault `KeyProvider` adapters. FIPS is documented, not tested in CI |
+| F10 | Coverage gaps | **Improved.** Detector packs (pci, india-bfsi, health-in, us, eu-uk, intl); `nonText: block`. OCR for images is open |
+| F11 | Packaging | **Fixed.** Node 22+. The security contact in `package.json` is unchanged and needs a company address |
+
+Still open: the independent security review and penetration test, a human-labelled benchmark, OCR for images, a FIPS CI job, and the commercial console (section 3.4).
+
 ---
 
 ## 1. Summary

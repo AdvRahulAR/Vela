@@ -11,6 +11,8 @@ export function detectApiFormat(pathname: string): LlmApiFormat | null {
   if (/\/responses(\/input_tokens)?$/.test(p)) return 'openai-responses';
   // count_tokens takes a full Messages request body.
   if (/\/messages(\/count_tokens)?$/.test(p) && !/\/threads\//.test(p)) return 'anthropic-messages';
+  // Gemini API and Vertex AI: …/models/{model}:generateContent (and streaming / token counting).
+  if (/\/models\/[^/]+:(?:generateContent|streamGenerateContent|countTokens)$/.test(p)) return 'gemini';
   return null;
 }
 
@@ -50,6 +52,9 @@ export function classifyRoute(method: string, pathname: string): RouteClass {
     if (/\/batches(\/|$)/.test(p)) return { kind: 'blocked', reason: 'batch results arrive later and cannot be restored' };
     if (/\/(files|uploads)(\/|$)/.test(p)) return { kind: 'blocked', reason: 'file uploads cannot be masked' };
     if (/\/audio(\/|$)/.test(p)) return { kind: 'blocked', reason: 'audio cannot be masked' };
+    if (/^\/model\/[^/]+\/(?:converse|converse-stream|invoke|invoke-with-response-stream)$/.test(p)) {
+      return { kind: 'blocked', reason: 'Bedrock requests are signed (SigV4); mask them in-process with wrapBedrockClient' };
+    }
   }
   return { kind: 'blocked', reason: 'Vela does not know how to mask this route' };
 }
@@ -163,8 +168,92 @@ function walkAnthropic(body: Json, visit: Visit): Json {
   return out;
 }
 
+/** Gemini parts: text, function calls and responses. inlineData / fileData are non-text. */
+function walkGeminiParts(parts: unknown, visit: Visit): unknown {
+  if (!Array.isArray(parts)) return parts;
+  return parts.map((p: Json) => {
+    if (!p || typeof p !== 'object') return p;
+    const o: Json = { ...p };
+    if (typeof o.text === 'string') o.text = visit(o.text, 'text');
+    if (o.functionCall?.args !== undefined) o.functionCall = { ...o.functionCall, args: visit(o.functionCall.args, 'value') };
+    if (o.functionResponse?.response !== undefined) o.functionResponse = { ...o.functionResponse, response: visit(o.functionResponse.response, 'value') };
+    return o;
+  });
+}
+
+function walkGemini(body: Json, visit: Visit): Json {
+  const out: Json = { ...body };
+  const sys = out.systemInstruction ?? out.system_instruction;
+  if (sys && typeof sys === 'object') {
+    const key = out.systemInstruction ? 'systemInstruction' : 'system_instruction';
+    out[key] = { ...sys, parts: walkGeminiParts(sys.parts, visit) };
+  }
+  if (Array.isArray(out.contents)) {
+    out.contents = out.contents.map((c: Json) => (c && typeof c === 'object' ? { ...c, parts: walkGeminiParts(c.parts, visit) } : c));
+  }
+  if (Array.isArray(out.tools)) {
+    out.tools = out.tools.map((t: Json) => {
+      const decls = t?.functionDeclarations ?? t?.function_declarations;
+      if (!Array.isArray(decls)) return t;
+      const key = t.functionDeclarations ? 'functionDeclarations' : 'function_declarations';
+      return { ...t, [key]: decls.map((d: Json) => ({ ...d, ...(typeof d.description === 'string' ? { description: visit(d.description, 'text') } : {}), ...(d.parameters ? { parameters: visit(d.parameters, 'value') } : {}) })) };
+    });
+  }
+  return out;
+}
+
+/** Bedrock Converse content blocks. */
+function walkConverseBlocks(content: unknown, visit: Visit): unknown {
+  if (!Array.isArray(content)) return content;
+  return content.map((b: Json) => {
+    if (!b || typeof b !== 'object') return b;
+    const o: Json = { ...b };
+    if (typeof o.text === 'string') o.text = visit(o.text, 'text');
+    if (o.toolUse?.input !== undefined) o.toolUse = { ...o.toolUse, input: visit(o.toolUse.input, 'value') };
+    if (Array.isArray(o.toolResult?.content)) {
+      o.toolResult = {
+        ...o.toolResult,
+        content: o.toolResult.content.map((c: Json) =>
+          typeof c?.text === 'string' ? { ...c, text: visit(c.text, 'text') } : c?.json !== undefined ? { ...c, json: visit(c.json, 'value') } : c,
+        ),
+      };
+    }
+    return o;
+  });
+}
+
+function walkConverse(body: Json, visit: Visit): Json {
+  const out: Json = { ...body };
+  if (Array.isArray(out.system)) out.system = walkConverseBlocks(out.system, visit);
+  if (Array.isArray(out.messages)) {
+    out.messages = out.messages.map((m: Json) => (m && typeof m === 'object' ? { ...m, content: walkConverseBlocks(m.content, visit) } : m));
+  }
+  if (Array.isArray(out.toolConfig?.tools)) {
+    out.toolConfig = {
+      ...out.toolConfig,
+      tools: out.toolConfig.tools.map((t: Json) =>
+        t?.toolSpec
+          ? {
+              ...t,
+              toolSpec: {
+                ...t.toolSpec,
+                ...(typeof t.toolSpec.description === 'string' ? { description: visit(t.toolSpec.description, 'text') } : {}),
+                ...(t.toolSpec.inputSchema ? { inputSchema: visit(t.toolSpec.inputSchema, 'value') } : {}),
+              },
+            }
+          : t,
+      ),
+    };
+  }
+  return out;
+}
+
 function walk(format: LlmApiFormat, body: Json, visit: Visit): Json {
   switch (format) {
+    case 'gemini':
+      return walkGemini(body, visit);
+    case 'bedrock-converse':
+      return walkConverse(body, visit);
     case 'openai-responses':
       return walkResponses(body, visit);
     case 'anthropic-messages':
@@ -246,6 +335,10 @@ export function findNonText(body: unknown): string[] {
     if (Array.isArray(v)) return v.forEach(visit);
     if (!v || typeof v !== 'object') return;
     const o = v as Json;
+    // Gemini parts and Bedrock Converse blocks carry media under a key rather than a `type`.
+    for (const k of ['inlineData', 'inline_data', 'fileData', 'file_data', 'image', 'document', 'video']) {
+      if (o[k] && typeof o[k] === 'object' && !(k === 'document' && o.type)) found.add(k);
+    }
     if (typeof o.type === 'string' && PART_KEYS.some((k) => k in o)) {
       const textDoc = o.type === 'document' && o.source?.type === 'text';
       if (!TEXT_PART_TYPES.has(o.type) && !textDoc) found.add(o.type);

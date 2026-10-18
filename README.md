@@ -33,7 +33,7 @@ Rahul Sharma (PAN ABCDE1234F, Aadhaar 2345 6789 0124, +91 98765 43210, rahul@com
 | Soft PII | `[REDACTED]` | `[PERSON_1]`, `[EMAIL_2]` (reversible, JSON-safe) |
 | Multi-message requests | — | One session per request → unique placeholders across all messages |
 | Streaming | — | Per-choice / per-tool-call / per-content-block chunk-aware restoration |
-| Providers | — | OpenAI Chat Completions, OpenAI Responses, Anthropic Messages |
+| Providers | — | OpenAI Chat Completions and Responses, Anthropic Messages, Google Gemini / Vertex AI, AWS Bedrock (Converse, InvokeModel) |
 | Surfaces | — | SDK, OpenAI & Anthropic client wrappers, fetch interceptor, Express, standalone proxy, CLI |
 
 ## Project status
@@ -113,6 +113,25 @@ await anthropic.messages.create({ model: 'claude-sonnet-4-5', system: '…', mes
 ```
 
 Covers `system` (string or blocks), text blocks, `tool_use.input`, `tool_result` content and plain-text documents. Streaming handles `text_delta`, `thinking_delta` and `input_json_delta`. Use `create({ stream: true })`: the `messages.stream()` helper throws `VelaRouteBlockedError`. `messages.countTokens` is masked; `messages.batches.create` is blocked.
+
+### AWS Bedrock
+
+```typescript
+import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
+import { Vela, wrapBedrockClient } from 'vela-privacy';
+
+const bedrock = wrapBedrockClient(new BedrockRuntimeClient({ region: 'ap-south-1' }), new Vela());
+await bedrock.send(new ConverseCommand({ modelId, messages }));
+```
+
+Bedrock requests are signed (SigV4), so a proxy can't change them. The wrapper masks in-process, before the SDK signs:
+- **Masked:** `Converse` and `ConverseStream` for any model; `InvokeModel` and `InvokeModelWithResponseStream` for Anthropic models.
+- **Allowed through:** `Get*` and `List*` commands.
+- **Blocked:** everything else (other models' native bodies, guardrails, async invoke). The proxy and fetch interceptor block Bedrock routes too.
+
+### Google Gemini / Vertex AI
+
+Point the Gemini client at the proxy (or use the fetch interceptor). `…:generateContent`, `…:streamGenerateContent` (JSON or `alt=sse`) and `…:countTokens` are masked and restored, including function calls. Without `--upstream`, Gemini paths go to `generativelanguage.googleapis.com`, and `--api-key` is sent as `x-goog-api-key`.
 
 ### Global fetch interceptor
 
@@ -325,6 +344,17 @@ const vela = await Vela.create({
 - **Tenants.** The tenant is recorded in audit events and bound into `x-vela-session`, so one tenant can't reproduce another's ciphertexts.
 - **Exposure.** The proxy refuses a non-loopback `--host` without tokens, unless you pass `--insecure`.
 - **Rate limits and TLS.** `--rate-limit <n>` caps requests per minute. `--tls-cert` and `--tls-key` serve HTTPS.
+
+### Deployment
+
+- `Dockerfile`: builds a non-root image that writes nothing to disk and sends audit events to stdout.
+- `deploy/helm/vela`: a Helm chart with a policy preset or inline policy, token and key Secrets, `/readyz` and `/health` probes, Prometheus annotations and a read-only root filesystem.
+- **Proxy endpoints** (all unauthenticated):
+  - `/health`: liveness;
+  - `/readyz`: checks the NER service;
+  - `/metrics`: counts only, never values.
+
+See also [docs/REGULATORY_MAPPING.md](docs/REGULATORY_MAPPING.md) for how these controls map to DPDP, CERT-In, RBI, GDPR, PCI DSS and HIPAA obligations, and [docs/DETECTION_REPORT.md](docs/DETECTION_REPORT.md) for detection accuracy.
 
 ---
 

@@ -22,6 +22,8 @@ const MASKED: Array<[string, unknown]> = [
   ['/v1/completions', { model: 'm', prompt: [SENTINEL_TEXT, SENTINEL_TEXT] }],
   ['/v1/embeddings', { model: 'm', input: SENTINEL_TEXT }],
   ['/v1/moderations', { model: 'm', input: [SENTINEL_TEXT] }],
+  ['/v1beta/models/gemini-2.5-flash:generateContent', { systemInstruction: { parts: [{ text: SENTINEL_TEXT }] }, contents: [{ role: 'user', parts: [{ text: SENTINEL_TEXT }] }] }],
+  ['/v1beta/models/gemini-2.5-flash:countTokens', { contents: [{ role: 'user', parts: [{ text: SENTINEL_TEXT }] }] }],
 ];
 
 /** Routes Vela cannot mask and restore (asynchronous results, files, audio…): rejected. */
@@ -38,6 +40,8 @@ const BLOCKED: Array<[string, unknown]> = [
   ['/v1/conversations', { items: [{ type: 'message', role: 'user', content: SENTINEL_TEXT }] }],
   ['/v1/fine_tuning/jobs', { training_file: 'f', suffix: SENTINEL_TEXT }],
   ['/v1/some/future/endpoint', { anything: SENTINEL_TEXT }],
+  ['/model/anthropic.claude-x/converse', { messages: [{ role: 'user', content: [{ text: SENTINEL_TEXT }] }] }],
+  ['/model/anthropic.claude-x/invoke', { anthropic_version: 'bedrock-2023-05-31', messages: [{ role: 'user', content: SENTINEL_TEXT }] }],
 ];
 
 describe('classifyRoute', () => {

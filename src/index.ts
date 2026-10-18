@@ -31,6 +31,8 @@ export {
   OpenAiChatStreamUnmasker,
   AnthropicStreamUnmasker,
   ResponsesStreamUnmasker,
+  GeminiStreamUnmasker,
+  ConverseStreamUnmasker,
 } from './core/streaming.js';
 export { detectPii, type DetectOptions, type DetectorPattern, type ContextRule } from './core/detector.js';
 
@@ -96,6 +98,7 @@ export {
 export { presidioRecognizer, codePointToUtf16Index, type PresidioRecognizerOptions } from './integrations/presidio.js';
 export { forwardLlmRequest, forwardFieldsRequest, enforceRequestPolicy, REQUEST_ID_HEADER } from './integrations/gateway.js';
 export { createFetchInterceptor } from './integrations/fetch.js';
+export { wrapBedrockClient, type BedrockRuntimeLikeClient } from './integrations/bedrock.js';
 export { createExpressMiddleware } from './integrations/express.js';
 export { runProxy } from './integrations/proxy.js';
 export { VelaMetrics } from './integrations/metrics.js';
@@ -115,6 +118,7 @@ export {
   DEFAULT_PROXY_HOST,
   DEFAULT_UPSTREAM_URL,
   DEFAULT_ANTHROPIC_URL,
+  DEFAULT_GEMINI_URL,
   SESSION_HEADER,
 } from './config/constants.js';
 

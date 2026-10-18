@@ -30,7 +30,34 @@ Compliance controls: policies, audit evidence, detector packs, synthetic-safe FP
   - per-client rate limits (`rateLimitPerMinute`, `--rate-limit`);
   - HTTPS (`tls`, `--tls-cert`/`--tls-key`);
   - caller session ids bound to the tenant.
-- CLI: `vela audit verify <file>`, `--audit-log`, `--audit-stdout`.
+- CLI: `vela audit verify <file> [--head <hash>]`, `--audit-log`, `--audit-stdout`, `VELA_UPSTREAM_API_KEY`.
+- **Providers:**
+  - Google Gemini / Vertex AI (`generateContent`, `streamGenerateContent` as JSON or SSE, `countTokens`) through the proxy and fetch interceptor;
+  - AWS Bedrock through `wrapBedrockClient`: Converse and ConverseStream, plus InvokeModel and InvokeModelWithResponseStream for Anthropic models; other commands are blocked.
+- **Operations:**
+  - Prometheus `/metrics` built from audit events (counts only);
+  - `/readyz` that checks the NER service;
+  - `vela.onEvent()` observers;
+  - a Dockerfile and a Helm chart (`deploy/helm/vela`).
+- **Detection evidence:**
+  - a seeded synthetic corpus (`npm run gen-corpus`) of about 2,400 labelled entities with a CI gate;
+  - `npm run eval -- --generated --report` writes `docs/DETECTION_REPORT.md` with 95% Wilson intervals.
+- **Detection fixes found by the corpus:**
+  - UPI IDs at the end of a sentence were not detected and were sent in clear text;
+  - Hinglish phone cues ("ka number");
+  - names with an unknown first name and a known surname;
+  - labelled addresses no longer run past the PIN code into the sentence.
+- **Fixes from reviewing the new controls** (`docs/solutions/review-050.md`):
+  - SDK wrappers no longer let raw `client.get`/`delete` through;
+  - redactions can't be restored through any path;
+  - the restore policy covers `parsed_arguments` and all Responses tool deltas;
+  - the residual pass decides by value and masks free-form keys;
+  - signed thinking blocks and MCP credentials are preserved;
+  - the audit chain survives a failed write;
+  - SDK wrappers write audit events;
+  - unknown policy entity types are rejected;
+  - failed proxy logins are rate-limited.
+- Docs: `docs/REGULATORY_MAPPING.md`, `docs/DETECTION_REPORT.md`.
 
 - **Audit events** (`audit` option, `jsonlFileSink`, `consoleSink`, `verifyAuditChain`):
   - Each request records a value-free `vela.request` event before anything is sent, and a `vela.response` event when the response completes. Blocked requests record `vela.blocked`, failed ones `vela.error`.
