@@ -60,8 +60,12 @@ PROXY OPTIONS:
   --host, -H <addr>     Interface to bind (default: 127.0.0.1 — loopback only)
   --upstream, -u <url>  Upstream base URL (default: OpenAI; Anthropic paths auto-route to api.anthropic.com)
   --api-key, -a <key>   Upstream API key to inject (otherwise the client's own key is forwarded)
-  --no-passthrough      Return 404 for routes other than chat/responses/messages (default: forward them,
-                        masking /v1/embeddings input)
+  --passthrough <mode>  Routes Vela can't mask. safe (default): body-free requests (GET /v1/models…) are
+                        forwarded, anything else (batches, files, unknown endpoints) gets 403.
+                        none: 404 for everything except maskable routes. all: forward unknown routes
+                        UNMASKED (opt-in only). Chat, Responses, Messages, count_tokens, embeddings,
+                        moderations and legacy completions are always masked.
+  --no-passthrough      Same as --passthrough none
   --key, -k <hex>       32-byte FPE key as 64 hex chars (or env VELA_FPE_KEY; default: random per process)
   --glossary, -g <s>    Comma-separated confidential terms to always mask
   --presidio-url <url>  Presidio Analyzer URL for NER-based name/location detection. If it is down,
@@ -103,6 +107,15 @@ function nerConfig(flags: Record<string, string | boolean>): Pick<VelaConfig, 'a
 
 const glossaryOf = (flags: Record<string, string | boolean>): string[] | undefined =>
   typeof flags['glossary'] === 'string' ? flags['glossary'].split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+
+function passthroughOf(flags: Record<string, string | boolean>): { passthrough?: 'safe' | 'all' | 'none' } {
+  if (flags['no-passthrough'] === true) return { passthrough: 'none' };
+  const p = flags['passthrough'];
+  if (p === undefined) return {};
+  if (p === 'safe' || p === 'all' || p === 'none') return { passthrough: p };
+  console.error('Error: --passthrough must be safe, none or all');
+  process.exit(1);
+}
 
 async function main(): Promise<void> {
   const { flags, positionals } = parseArgs(process.argv.slice(2));
@@ -172,7 +185,7 @@ async function main(): Promise<void> {
       ...(typeof flags['host'] === 'string' ? { host: flags['host'] } : {}),
       ...(typeof flags['upstream'] === 'string' ? { upstream: flags['upstream'] } : {}),
       ...(typeof flags['api-key'] === 'string' ? { apiKey: flags['api-key'] } : {}),
-      ...(flags['no-passthrough'] === true ? { passthrough: false } : {}),
+      ...passthroughOf(flags),
     });
     return;
   }

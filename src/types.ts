@@ -264,6 +264,12 @@ export interface FetchInterceptorOptions {
   targetUrls?: string[];
   /** Resolve a stable session id for a request (alternatively send an `x-vela-session` header). */
   sessionId?: (url: string, init?: RequestInit) => string | undefined;
+  /**
+   * Routes on a known provider host that Vela can't mask (batches, files,
+   * unknown endpoints): 'safe' (default) throws `VelaRouteBlockedError`;
+   * 'all' sends them unmasked.
+   */
+  passthrough?: 'safe' | 'all';
 }
 
 export interface ExpressMiddlewareOptions {
@@ -280,6 +286,14 @@ export interface ProxyServerOptions {
   /** Upstream API key. Sent as `Authorization: Bearer` (OpenAI) or `x-api-key` (Anthropic). */
   apiKey?: string;
   maxBodySizeBytes?: number;
-  /** Forward non-chat routes (/v1/models, /v1/embeddings…) upstream. Default: true. Set false to 404 them. */
-  passthrough?: boolean;
+  /**
+   * Routes Vela cannot mask:
+   * - 'safe' (default): body-free requests (GET /v1/models, DELETE …) are forwarded;
+   *   any other route Vela can't mask (batches, files, audio, unknown endpoints) gets 403.
+   * - 'none' (or `false`): only maskable routes are served; everything else gets 404.
+   * - 'all' (or `true`): unknown routes are forwarded **unmasked**. Opt in only if you accept that.
+   * Chat, Responses, Messages, count_tokens, embeddings, moderations and legacy
+   * completions are always masked.
+   */
+  passthrough?: boolean | 'safe' | 'all' | 'none';
 }

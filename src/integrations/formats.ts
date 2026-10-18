@@ -7,9 +7,43 @@ type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-ex
 export function detectApiFormat(pathname: string): LlmApiFormat | null {
   const p = pathname.replace(/\/+$/, '');
   if (/\/chat\/completions$/.test(p)) return 'openai-chat';
-  if (/\/responses$/.test(p)) return 'openai-responses';
-  if (/\/messages$/.test(p) && !/\/threads\//.test(p)) return 'anthropic-messages';
+  // input_tokens counts tokens for a Responses request: same body, same masking.
+  if (/\/responses(\/input_tokens)?$/.test(p)) return 'openai-responses';
+  // count_tokens takes a full Messages request body.
+  if (/\/messages(\/count_tokens)?$/.test(p) && !/\/threads\//.test(p)) return 'anthropic-messages';
   return null;
+}
+
+/**
+ * How Vela handles a request to a provider route:
+ * - `llm`: a chat/messages/responses request, masked and restored;
+ * - `fields`: top-level text fields (`input`, `prompt`) are masked; the JSON response is restored;
+ * - `safe`: a method that carries no body (GET, HEAD, OPTIONS, DELETE), forwarded as-is;
+ * - `blocked`: anything else. Vela can't mask it, so it is not sent (fail closed).
+ */
+export type RouteClass =
+  | { kind: 'llm'; format: LlmApiFormat }
+  | { kind: 'fields'; fields: string[]; allowStream: boolean }
+  | { kind: 'safe' }
+  | { kind: 'blocked'; reason: string };
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'DELETE']);
+
+export function classifyRoute(method: string, pathname: string): RouteClass {
+  const m = method.toUpperCase();
+  if (SAFE_METHODS.has(m)) return { kind: 'safe' };
+  const p = pathname.replace(/\/+$/, '');
+  if (m === 'POST') {
+    const format = detectApiFormat(p);
+    if (format) return { kind: 'llm', format };
+    if (/\/(embeddings|moderations)$/.test(p)) return { kind: 'fields', fields: ['input'], allowStream: false };
+    // Legacy text completions; streaming them is not supported, so it is rejected.
+    if (/\/completions$/.test(p)) return { kind: 'fields', fields: ['prompt'], allowStream: false };
+    if (/\/batches(\/|$)/.test(p)) return { kind: 'blocked', reason: 'batch results arrive later and cannot be restored' };
+    if (/\/(files|uploads)(\/|$)/.test(p)) return { kind: 'blocked', reason: 'file uploads cannot be masked' };
+    if (/\/audio(\/|$)/.test(p)) return { kind: 'blocked', reason: 'audio cannot be masked' };
+  }
+  return { kind: 'blocked', reason: 'Vela does not know how to mask this route' };
 }
 
 /**
@@ -22,6 +56,7 @@ function mapTextParts(parts: unknown, visit: Visit): unknown {
   if (typeof parts === 'string') return visit(parts, 'text');
   if (!Array.isArray(parts)) return parts;
   return parts.map((p: Json) => {
+    if (typeof p === 'string') return visit(p, 'text');
     if (!p || typeof p !== 'object') return p;
     if (typeof p.text === 'string') return { ...p, text: visit(p.text, 'text') };
     return p;
@@ -157,4 +192,20 @@ export function maskLlmRequest<T extends object>(session: MaskSession, format: L
 export async function maskLlmRequestAsync<T extends object>(session: MaskSession, format: LlmApiFormat, body: T): Promise<T> {
   await session.prepareValue(body);
   return maskLlmRequest(session, format, body);
+}
+
+/**
+ * Mask top-level text fields (`input`, `prompt`) of a `fields` route. Each
+ * field may be a string or an array of strings; other values are left alone.
+ */
+export async function maskFieldsAsync<T extends Record<string, unknown>>(session: MaskSession, fields: string[], body: T): Promise<T> {
+  const out: Record<string, unknown> = { ...body };
+  await session.prepareValue(fields.map((f) => body[f]));
+  for (const f of fields) {
+    const v = out[f];
+    if (typeof v === 'string') out[f] = session.mask(v);
+    // Arrays may hold strings, token ids or multimodal parts ({ type: 'text', text }).
+    else if (Array.isArray(v)) out[f] = mapTextParts(v, (x) => session.mask(x as string));
+  }
+  return out as T;
 }

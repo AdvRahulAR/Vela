@@ -1,6 +1,12 @@
 // Core
 export { Vela } from './core/vela.js';
-export { VelaError, VelaInputTooLargeError, VelaRecognizerError, VelaNotPreparedError } from './core/errors.js';
+export {
+  VelaError,
+  VelaInputTooLargeError,
+  VelaRecognizerError,
+  VelaNotPreparedError,
+  VelaRouteBlockedError,
+} from './core/errors.js';
 export { MaskSession } from './core/session.js';
 export { FF1 } from './core/ff1.js';
 export { FpeMasker, STRUCTURED_TYPES } from './core/fpe.js';
@@ -43,9 +49,16 @@ export {
   unmaskAnthropicStream,
   wrapAnthropicClient,
 } from './integrations/anthropic.js';
-export { detectApiFormat, maskLlmRequest, maskLlmRequestAsync } from './integrations/formats.js';
+export {
+  detectApiFormat,
+  classifyRoute,
+  maskLlmRequest,
+  maskLlmRequestAsync,
+  maskFieldsAsync,
+  type RouteClass,
+} from './integrations/formats.js';
 export { presidioRecognizer, codePointToUtf16Index, type PresidioRecognizerOptions } from './integrations/presidio.js';
-export { forwardLlmRequest } from './integrations/gateway.js';
+export { forwardLlmRequest, forwardFieldsRequest } from './integrations/gateway.js';
 export { createFetchInterceptor } from './integrations/fetch.js';
 export { createExpressMiddleware } from './integrations/express.js';
 export { runProxy } from './integrations/proxy.js';

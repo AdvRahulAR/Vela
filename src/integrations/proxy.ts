@@ -1,15 +1,22 @@
-import { VelaError } from '../core/errors.js';
+import { VelaError, VelaRouteBlockedError } from '../core/errors.js';
 import { createServer, type Server } from 'node:http';
 import type { Vela } from '../core/vela.js';
 import { DEFAULT_ANTHROPIC_URL, DEFAULT_PROXY_HOST, DEFAULT_PROXY_PORT, DEFAULT_UPSTREAM_URL, PACKAGE_VERSION } from '../config/constants.js';
 import { Logger } from '../utils/logger.js';
-import { detectApiFormat } from './formats.js';
-import { isEmbeddingsPath, forwardLlmRequest, forwardPassthrough, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
+import { classifyRoute, detectApiFormat } from './formats.js';
+import { forwardFieldsRequest, forwardLlmRequest, forwardPassthrough, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
 import type { ProxyServerOptions } from '../types.js';
 
 function sendJson(res: import('node:http').ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
+}
+
+/** `true` (the pre-0.4.1 opt-in) means 'all'; `false` means 'none'; default 'safe'. */
+export function normalizePassthrough(p: ProxyServerOptions['passthrough']): 'safe' | 'all' | 'none' {
+  if (p === true) return 'all';
+  if (p === false) return 'none';
+  return p ?? 'safe';
 }
 
 /**
@@ -25,6 +32,7 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
     !opts.upstream && detectApiFormat(path) === 'anthropic-messages' ? DEFAULT_ANTHROPIC_URL : upstream;
   const maxBody = opts.maxBodySizeBytes ?? 10 * 1024 * 1024;
   const logger = new Logger('vela-proxy', true);
+  const passthrough = normalizePassthrough(opts.passthrough);
 
   const server = createServer(async (req, res) => {
     const rawUrl = req.url ?? '/';
@@ -40,9 +48,17 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
       return;
     }
 
-    const isLlmRoute = req.method === 'POST' && detectApiFormat(urlPath) !== null;
-    if (!isLlmRoute && opts.passthrough === false) {
-      sendJson(res, 404, { error: { message: `Route ${req.method} ${urlPath} not found` } });
+    const method = (req.method ?? 'GET').toUpperCase();
+    const route = classifyRoute(method, urlPath);
+    if (route.kind === 'safe' && passthrough === 'none') {
+      sendJson(res, 404, { error: { message: `Route ${method} ${urlPath} not found` } });
+      return;
+    }
+    if (route.kind === 'blocked' && passthrough !== 'all') {
+      req.resume();
+      const err = new VelaRouteBlockedError(method, urlPath, route.reason);
+      logger.warn('proxy_route_blocked', { method, urlPath });
+      sendJson(res, err.status, { error: { message: err.message, type: 'vela_route_blocked' } });
       return;
     }
 
@@ -60,47 +76,13 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
     }
     const body = Buffer.concat(chunks).toString('utf8');
 
-    if (!isLlmRoute) {
-      const controller = new AbortController();
-      res.on('close', () => {
-        if (!res.writableEnded) controller.abort();
-      });
+    if (route.kind === 'llm' || route.kind === 'fields') {
       try {
-        const method = req.method ?? 'GET';
-        const payload: string | undefined = body || undefined;
-        if (payload && method === 'POST' && isEmbeddingsPath(urlPath)) JSON.parse(payload);
-        const response = await forwardPassthrough(
-          vela,
-          {
-            url: upstream + rawUrl,
-            method,
-            headers: nodeHeadersToWeb(req.headers),
-            ...(payload !== undefined ? { body: payload } : {}),
-            signal: controller.signal,
-          },
-          opts.apiKey ? { apiKey: opts.apiKey } : {},
-        );
-        await pipeResponseToNode(response, res);
-      } catch (err) {
-        if (res.headersSent) {
-          res.end();
-          return;
-        }
-        if (err instanceof SyntaxError) {
-          sendJson(res, 400, { error: { message: 'Invalid JSON payload' } });
-          return;
-        }
-        const msg = err instanceof Error ? err.message : 'Unknown proxy error';
-        sendJson(res, 502, { error: { message: `Vela gateway proxy failure: ${msg}`, type: 'gateway_error' } });
+        JSON.parse(body);
+      } catch {
+        sendJson(res, 400, { error: { message: 'Invalid JSON payload' } });
+        return;
       }
-      return;
-    }
-
-    try {
-      JSON.parse(body);
-    } catch {
-      sendJson(res, 400, { error: { message: 'Invalid JSON payload' } });
-      return;
     }
 
     const start = Date.now();
@@ -108,20 +90,24 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
     res.on('close', () => {
       if (!res.writableEnded) controller.abort();
     });
+    const forward = {
+      url: upstreamFor(urlPath) + rawUrl,
+      method,
+      headers: nodeHeadersToWeb(req.headers),
+      // Body-free methods never forward a body, so nothing can ride along unmasked.
+      ...(body && route.kind !== 'safe' ? { body } : {}),
+      signal: controller.signal,
+    };
+    const fwdOpts = opts.apiKey ? { apiKey: opts.apiKey } : {};
     try {
-      const response = await forwardLlmRequest(
-        vela,
-        {
-          url: upstreamFor(urlPath) + rawUrl,
-          method: 'POST',
-          headers: nodeHeadersToWeb(req.headers),
-          body,
-          signal: controller.signal,
-        },
-        opts.apiKey ? { apiKey: opts.apiKey } : {},
-      );
+      const response =
+        route.kind === 'llm'
+          ? await forwardLlmRequest(vela, forward, fwdOpts)
+          : route.kind === 'fields'
+            ? await forwardFieldsRequest(vela, forward, route.fields, fwdOpts)
+            : await forwardPassthrough(vela, forward, fwdOpts);
       await pipeResponseToNode(response, res);
-      logger.info('proxy_request', { urlPath, status: response.status }, Date.now() - start);
+      if (route.kind !== 'safe') logger.info('proxy_request', { urlPath, route: route.kind, status: response.status }, Date.now() - start);
     } catch (err) {
       logger.error('proxy_request_error', err, { urlPath });
       if (res.headersSent) {
@@ -143,6 +129,9 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
     /* eslint-disable no-console -- operator-facing startup banner, independent of enableLogging */
     console.log(`[vela] Privacy proxy active on http://${shown}:${port}`);
     console.log(`[vela] Forwarding upstream to ${upstream}`);
+    if (passthrough === 'all') {
+      console.warn('[vela] WARNING: passthrough "all" forwards routes Vela cannot mask (batches, files, unknown endpoints) unmasked.');
+    }
     if (host === '0.0.0.0' || host === '::') {
       console.warn('[vela] WARNING: listening on all interfaces — anyone who can reach this port can use it.');
     }

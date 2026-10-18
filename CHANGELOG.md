@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.1
+
+**Security fix: unmasked requests through unrecognised routes.** Found by the compliance audit (`docs/COMPLIANCE_AUDIT.md`, F1 and F2). Upgrade if you use the proxy, the fetch interceptor or a client wrapper.
+
+- **Proxy:** routes Vela didn't recognise were forwarded with their text unmasked, including Anthropic `/v1/messages/count_tokens` and Message Batches, OpenAI legacy `/v1/completions`, `/v1/moderations` and Assistants thread messages. Now:
+  - `count_tokens` and `/v1/responses/input_tokens` are masked like the requests they count;
+  - `/completions` prompts and `/moderations` input are masked (streaming legacy completions is rejected);
+  - any other route that carries a body is **rejected with HTTP 403** (`VelaRouteBlockedError`) and nothing is sent.
+  - Body-free requests (`GET /v1/models`) still pass. The new `passthrough` modes are `'safe'` (default), `'none'` and `'all'`. `'all'` (or `true`) restores the old behaviour as an explicit opt-in. CLI: `--passthrough safe|none|all`.
+- **Fetch interceptor:** a request body that wasn't a string or `Uint8Array` (a `Blob`, `ArrayBuffer`, `ReadableStream`…) was sent unmasked. Every body type is now read and masked. An LLM request whose body isn't valid JSON throws instead of being sent. On known provider hosts, the route rules above apply (`passthrough: 'all'` opts out).
+- **Client wrappers:** methods other than `create` went to the provider unmasked.
+  - Now masked:
+    - OpenAI `chat.completions.parse`, `responses.parse`, `responses.inputTokens.count`, `completions.create`, `embeddings.create` and `moderations.create`;
+    - Anthropic `messages.countTokens` and `beta.messages.create`/`countTokens`.
+  - Now throw `VelaRouteBlockedError`: methods Vela can't mask (`stream()` helpers, batches, file uploads, audio, image generation, Assistants threads).
+- New exports: `classifyRoute`, `maskFieldsAsync`, `forwardFieldsRequest`, `VelaRouteBlockedError`.
+- Docs: corpus results are stated as counts, not recall percentages; threat model and reviewer guide updated (new fail-open checklist).
+
 ## 0.4.0
 
 NER services as a first-class, fail-closed detection path.

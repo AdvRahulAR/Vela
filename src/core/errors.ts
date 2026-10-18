@@ -45,3 +45,15 @@ export class VelaNotPreparedError extends VelaError {
     );
   }
 }
+
+/**
+ * The request goes to a route Vela cannot mask and restore (batches, files,
+ * audio, an endpoint it doesn't know). It was rejected and nothing was sent.
+ */
+export class VelaRouteBlockedError extends VelaError {
+  readonly route: string;
+  constructor(method: string, route: string, reason: string) {
+    super(`Vela blocked ${method} ${route}: ${reason}. Nothing was sent upstream.`, 403);
+    this.route = route;
+  }
+}

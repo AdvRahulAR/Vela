@@ -1,7 +1,8 @@
 import type { Vela } from '../core/vela.js';
 import { createSseTransformer } from '../core/streaming.js';
 import { SESSION_HEADER } from '../config/constants.js';
-import { detectApiFormat, maskLlmRequestAsync } from './formats.js';
+import { VelaError } from '../core/errors.js';
+import { detectApiFormat, maskFieldsAsync, maskLlmRequestAsync } from './formats.js';
 
 const STRIP_REQUEST_HEADERS = [
   'host',
@@ -50,6 +51,32 @@ function sanitizeResponseHeaders(h: Headers): Headers {
   return out;
 }
 
+/** Headers for the upstream request: hop-by-hop and Vela headers removed, API key applied. */
+function upstreamHeaders(source: Headers, apiKey: string | undefined, anthropic: boolean): Headers {
+  const headers = new Headers(source);
+  for (const k of STRIP_REQUEST_HEADERS) headers.delete(k);
+  if (apiKey) {
+    if (anthropic) {
+      headers.delete('authorization');
+      headers.set('x-api-key', apiKey);
+      if (!headers.has('anthropic-version')) headers.set('anthropic-version', '2023-06-01');
+    } else {
+      headers.set('authorization', `Bearer ${apiKey}`);
+    }
+  }
+  return headers;
+}
+
+/** Restore a JSON (or plain-text) upstream body. */
+async function restoreBody(upstream: Response, session: { unmaskValue: <T>(v: T) => T; unmask: (t: string) => { text: string } }): Promise<string> {
+  const text = await upstream.text();
+  try {
+    return JSON.stringify(session.unmaskValue(JSON.parse(text)));
+  } catch {
+    return session.unmask(text).text;
+  }
+}
+
 /**
  * Mask an LLM request, forward it upstream and return a Response whose body
  * (JSON or SSE) has every masked value restored. Shared by the fetch
@@ -67,18 +94,8 @@ export async function forwardLlmRequest(vela: Vela, req: ForwardRequest, opts: F
   const session = vela.createSession(sessionId ? { sessionId } : {});
   const payload = await maskLlmRequestAsync(session, format, body);
 
-  const headers = new Headers(req.headers);
-  for (const k of STRIP_REQUEST_HEADERS) headers.delete(k);
+  const headers = upstreamHeaders(req.headers, opts.apiKey, format === 'anthropic-messages');
   headers.set('content-type', 'application/json');
-  if (opts.apiKey) {
-    if (format === 'anthropic-messages') {
-      headers.delete('authorization');
-      headers.set('x-api-key', opts.apiKey);
-      if (!headers.has('anthropic-version')) headers.set('anthropic-version', '2023-06-01');
-    } else {
-      headers.set('authorization', `Bearer ${opts.apiKey}`);
-    }
-  }
 
   const upstream = await doFetch(req.url, {
     method: 'POST',
@@ -110,14 +127,7 @@ export async function forwardLlmRequest(vela: Vela, req: ForwardRequest, opts: F
   }
 
   if (contentType.includes('json')) {
-    const text = await upstream.text();
-    let restored: string;
-    try {
-      restored = JSON.stringify(session.unmaskValue(JSON.parse(text)));
-    } catch {
-      restored = session.unmask(text).text;
-    }
-    return new Response(restored, { status: upstream.status, statusText: upstream.statusText, headers: outHeaders });
+    return new Response(await restoreBody(upstream, session), { status: upstream.status, statusText: upstream.statusText, headers: outHeaders });
   }
 
   return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: outHeaders });
@@ -162,41 +172,53 @@ export function nodeHeadersToWeb(h: Record<string, string | string[] | undefined
   return out;
 }
 
-/** True for the embeddings endpoint, whose `input` text is masked before forwarding. */
-export function isEmbeddingsPath(pathname: string): boolean {
-  return /\/embeddings$/.test(pathname.replace(/\/+$/, ''));
+/**
+ * Forward a `fields` route (embeddings, moderations, legacy completions) with
+ * its top-level text fields masked, restoring a JSON response. Streaming is
+ * rejected for these routes: there is no streaming restorer for them.
+ */
+export async function forwardFieldsRequest(
+  vela: Vela,
+  req: ForwardRequest,
+  fields: string[],
+  opts: ForwardOptions = {},
+): Promise<Response> {
+  const doFetch = opts.fetchImpl ?? fetch;
+  const parsed = JSON.parse(req.body ?? '') as Record<string, unknown>;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new VelaError('Request body must be a JSON object', 400);
+  if (parsed.stream === true) throw new VelaError('Streaming is not supported on this route through Vela; nothing was sent', 400);
+  const sessionId = req.headers.get(SESSION_HEADER) ?? opts.sessionId ?? undefined;
+  const session = vela.createSession(sessionId ? { sessionId } : {});
+  const payload = await maskFieldsAsync(session, fields, parsed);
+
+  const headers = upstreamHeaders(req.headers, opts.apiKey, new URL(req.url).hostname === 'api.anthropic.com');
+  headers.set('content-type', 'application/json');
+  const upstream = await doFetch(req.url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+    ...(req.signal ? { signal: req.signal } : {}),
+  });
+  const outHeaders = sanitizeResponseHeaders(upstream.headers);
+  if ((upstream.headers.get('content-type') ?? '').includes('json')) {
+    return new Response(await restoreBody(upstream, session), { status: upstream.status, statusText: upstream.statusText, headers: outHeaders });
+  }
+  return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: outHeaders });
 }
 
 /**
- * Forward a non-chat route (e.g. `/v1/models`, `/v1/embeddings`) upstream.
- * Embeddings `input` text is masked (the response is vectors, so there is
- * nothing to restore); everything else is passed through untouched.
+ * Forward a request upstream untouched (no masking). Used for body-free routes
+ * (`GET /v1/models`) and, only when an operator opts in with
+ * `passthrough: 'all'`, for routes Vela would otherwise block.
  */
-export async function forwardPassthrough(vela: Vela, req: ForwardRequest, opts: ForwardOptions = {}): Promise<Response> {
+export async function forwardPassthrough(_vela: Vela, req: ForwardRequest, opts: ForwardOptions = {}): Promise<Response> {
   const doFetch = opts.fetchImpl ?? fetch;
   const url = new URL(req.url);
-  let body: string | undefined = req.body;
-  if (body && req.method.toUpperCase() === 'POST' && isEmbeddingsPath(url.pathname)) {
-    const parsed = JSON.parse(body) as Record<string, unknown>;
-    const session = vela.createSession({});
-    await session.prepareValue(parsed.input);
-    if (typeof parsed.input === 'string') parsed.input = session.mask(parsed.input);
-    else if (Array.isArray(parsed.input)) {
-      parsed.input = parsed.input.map((v) => (typeof v === 'string' ? session.mask(v) : v));
-    }
-    body = JSON.stringify(parsed);
-  }
-
-  const headers = new Headers(req.headers);
-  for (const k of STRIP_REQUEST_HEADERS) headers.delete(k);
-  if (opts.apiKey) {
-    if (url.hostname === 'api.anthropic.com') headers.set('x-api-key', opts.apiKey);
-    else headers.set('authorization', `Bearer ${opts.apiKey}`);
-  }
+  const headers = upstreamHeaders(req.headers, opts.apiKey, url.hostname === 'api.anthropic.com');
   const upstream = await doFetch(req.url, {
     method: req.method,
     headers,
-    ...(body !== undefined && !['GET', 'HEAD'].includes(req.method.toUpperCase()) ? { body } : {}),
+    ...(req.body !== undefined && !['GET', 'HEAD'].includes(req.method.toUpperCase()) ? { body: req.body } : {}),
     ...(req.signal ? { signal: req.signal } : {}),
   });
   return new Response(upstream.body, {

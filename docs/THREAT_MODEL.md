@@ -1,6 +1,6 @@
 # Threat model
 
-This document states what vela-privacy protects, against whom, and where its protection stops. It applies to version 0.4.
+This document states what vela-privacy protects, against whom, and where its protection stops. It applies to version 0.4.1.
 
 ## What Vela does
 
@@ -40,6 +40,7 @@ Vela sits between an application and an LLM provider. On the way out, it detects
 
 - **Detected values never leave in clear text.** Every detected entity is replaced. If format-preserving encryption is impossible (domain too small, collision), the value becomes a placeholder instead. Custom entity types are always masked.
 - **No cross-session linkability by default.** Without a shared `sessionId`, each session uses a random FF1 tweak, so the same value encrypts differently across sessions. Tweaks are also separated per entity type.
+- **Fail closed on routes Vela can't mask.** The proxy masks Chat Completions, Responses (and `input_tokens`), Messages (and `count_tokens`), embeddings, moderations and legacy completions. Body-free requests pass; every other body-carrying route is rejected (HTTP 403, `VelaRouteBlockedError`) unless the operator sets `passthrough: 'all'`. The fetch interceptor applies the same rule on provider hosts and refuses to send an LLM request whose body it can't read as JSON. The client wrappers mask the text methods and throw on the rest (batches, files, `stream()` helpers).
 - **Fail closed on infrastructure errors.** If an async recognizer fails or times out, the request is rejected (HTTP 503) unless `recognizerFailure: 'continue'` is set. If a single text exceeds `maxInputChars`, the request is rejected (HTTP 413). In both cases nothing is sent upstream.
 - **No values in logs.** The logger records counts and timings only.
 - **Linear-time detection.** Every detector regex is tested against adversarial input, and detection time grows linearly with input size.
@@ -48,7 +49,7 @@ Vela sits between an application and an LLM provider. On the way out, it detects
 
 These are deliberate limits. Users should know them before relying on Vela.
 
-1. **Detection is not complete.** Without an NER service, names and addresses are found by heuristics and are missed in Indian scripts, for rare names and in free-form addresses. On the project's labelled corpus, recall is about 77% for names and 71% for addresses (structured identifiers: 100%). An undetected value is sent as-is.
+1. **Detection is not complete.** Without an NER service, names and addresses are found by heuristics and are missed in Indian scripts, for rare names and in free-form addresses. On the project's small labelled corpus (80 cases), 10 of 13 names and 5 of 7 addresses are found, and every structured identifier is; the corpus is a regression gate, not a recall estimate. An undetected value is sent as-is.
 2. **Format-preserving encryption reveals format.** By design, the provider can see:
    - the length and separators of every encrypted value
    - a card's brand digit

@@ -3,9 +3,11 @@ import type { MaskSession } from '../core/session.js';
 import { AnthropicStreamUnmasker, toRestoreSource } from '../core/streaming.js';
 import { maskLlmRequest, maskLlmRequestAsync } from './formats.js';
 import { wrapAsyncIterable, type WrapClientOptions } from './openai.js';
+import { blockMethods, overrideMethod } from './wrap-util.js';
 import type { MaskResult, SessionOptions } from '../types.js';
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+type Fn = (...args: any[]) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 /**
  * Mask an Anthropic Messages API request: `system` (string or blocks), message
@@ -53,15 +55,23 @@ export interface AnthropicCompatibleClient {
   };
 }
 
+const ANTHROPIC_BLOCKED: Array<[string, string]> = [
+  ['messages.stream', 'use create({ stream: true }) instead of the stream() helper'],
+  ['messages.batches.create', 'batch results arrive later and cannot be restored'],
+  ['beta.messages.stream', 'use create({ stream: true }) instead of the stream() helper'],
+  ['beta.messages.toolRunner', 'use create() and run tools yourself'],
+  ['beta.messages.batches.create', 'batch results arrive later and cannot be restored'],
+  ['beta.files.upload', 'file uploads cannot be masked'],
+];
+
 /**
- * Wrap an Anthropic client so `messages.create` (sync and `stream: true`) is
- * masked/restored. The `messages.stream()` helper is not wrapped — use
- * `create({ stream: true })` instead.
+ * Wrap an Anthropic client. `messages.create` (sync and `stream: true`),
+ * `messages.countTokens` and their `beta.messages` equivalents are masked and
+ * restored. Methods Vela can't mask (`messages.stream()`, batches, file
+ * uploads) throw `VelaRouteBlockedError` instead of sending unmasked text.
  */
 export function wrapAnthropicClient<T extends AnthropicCompatibleClient>(client: T, vela: Vela, opts: WrapClientOptions = {}): T {
-  const original = client.messages.create.bind(client.messages);
-  const wrappedMessages = Object.create(client.messages);
-  wrappedMessages.create = async (params: Json, ...rest: unknown[]) => {
+  const messagesMethod = (original: Fn) => async (params: Json, ...rest: unknown[]) => {
     const sid = typeof opts.sessionId === 'function' ? opts.sessionId(params) : opts.sessionId;
     const session = vela.createSession(sid !== undefined ? { sessionId: sid } : {});
     const payload = await maskLlmRequestAsync(session, 'anthropic-messages', params);
@@ -71,7 +81,9 @@ export function wrapAnthropicClient<T extends AnthropicCompatibleClient>(client:
     }
     return session.unmaskValue(result);
   };
-  const wrapped = Object.create(client);
-  wrapped.messages = wrappedMessages;
-  return wrapped as T;
+  let out: T = client;
+  for (const path of ['messages.create', 'messages.countTokens', 'beta.messages.create', 'beta.messages.countTokens']) {
+    out = overrideMethod(out, path.split('.'), messagesMethod);
+  }
+  return blockMethods(out, ANTHROPIC_BLOCKED);
 }

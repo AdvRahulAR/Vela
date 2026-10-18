@@ -1,6 +1,6 @@
 {
   "name": "vela-privacy",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "LLM privacy gateway — PII masking with NIST FF1 format-preserving encryption, reversible placeholders and streaming de-masking for OpenAI and Anthropic",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",

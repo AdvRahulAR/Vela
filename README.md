@@ -41,7 +41,7 @@ Rahul Sharma (PAN ABCDE1234F, Aadhaar 2345 6789 0124, +91 98765 43210, rahul@com
 Vela is **pre-1.0 and has not yet been independently security-reviewed**. What that means in practice:
 
 - **The encryption and restoration are well tested.** FF1 matches NIST's official vectors, and every release passes property-based tests (round-trip, no leakage, checksum validity, streaming), a labelled detection corpus and a regex denial-of-service guard on Node 18 to 24.
-- **Detection without NER is best-effort.** Structured identifiers have 100% recall on the test corpus. Names and addresses are found by heuristics and are missed in Indian scripts, for rare names and in free-form addresses (current corpus recall: about 77% for names and 71% for addresses).
+- **Detection without NER is best-effort.** Every structured identifier in the labelled corpus is detected, but the corpus is still small (80 cases), so treat that as a regression gate rather than a recall estimate. Names and addresses are found by heuristics and are missed in Indian scripts, for rare names and in free-form addresses (on the corpus: 10 of 13 labelled names and 5 of 7 addresses).
 - **Recommended production setup:** the proxy or a client wrapper, a [Presidio NER service](examples/presidio/README.md) with `recognizerFailure: 'block'` (the default), and a `sessionId` per conversation.
 - Read the [threat model](docs/THREAT_MODEL.md) for what Vela does and does not protect against, and [SECURITY.md](SECURITY.md) to report a vulnerability.
 
@@ -112,7 +112,7 @@ const anthropic = wrapAnthropicClient(new Anthropic(), new Vela());
 await anthropic.messages.create({ model: 'claude-sonnet-4-5', system: '…', messages, max_tokens: 1024, stream: true });
 ```
 
-Covers `system` (string or blocks), text blocks, `tool_use.input`, `tool_result` content and plain-text documents. Streaming handles `text_delta`, `thinking_delta` and `input_json_delta`. Use `create({ stream: true })` rather than the `messages.stream()` helper.
+Covers `system` (string or blocks), text blocks, `tool_use.input`, `tool_result` content and plain-text documents. Streaming handles `text_delta`, `thinking_delta` and `input_json_delta`. Use `create({ stream: true })`: the `messages.stream()` helper throws `VelaRouteBlockedError`. `messages.countTokens` is masked; `messages.batches.create` is blocked.
 
 ### Global fetch interceptor
 
@@ -143,7 +143,9 @@ npx vela-privacy keygen --kem                      # full ML-KEM-768 keypair (JS
 
 Point `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` (or the Anthropic SDK's `baseURL=http://127.0.0.1:8787`) at it. If you don't pass `--upstream`, Anthropic paths go to `api.anthropic.com` and everything else goes to `api.openai.com`.
 
-**Routes:** `/chat/completions`, `/responses` and `/messages` are masked and restored. `/embeddings` input is masked before forwarding. Every other route (e.g. `GET /v1/models`) is forwarded to the upstream untouched; pass `--no-passthrough` to return 404 for them instead.
+**Routes:** `/chat/completions`, `/responses` (and `/responses/input_tokens`), `/messages` (and `/messages/count_tokens`) are masked and restored. `/embeddings` and `/moderations` input and legacy `/completions` prompts are masked too. Body-free requests such as `GET /v1/models` are forwarded. **Any other route that carries a body (Message Batches, `/batches`, `/files`, audio, Assistants threads, unknown endpoints) is rejected with HTTP 403 and nothing is sent**, because Vela can't mask it. `--passthrough none` also returns 404 for body-free routes; `--passthrough all` forwards unknown routes *unmasked* and is only for operators who accept that.
+
+The client wrappers and fetch interceptor follow the same rule: methods such as `messages.countTokens`, `embeddings.create` and `responses.parse` are masked, while `batches.create`, `files.create` and the `stream()` helpers throw `VelaRouteBlockedError` instead of sending unmasked text.
 
 ---
 
