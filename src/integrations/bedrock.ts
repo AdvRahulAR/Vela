@@ -28,6 +28,12 @@ function responseText(body: unknown): string {
   return decoder.decode(b as Uint8Array);
 }
 
+/** Bytes with the SDK's Uint8ArrayBlobAdapter helper, so callers' transformToString() keeps working. */
+function blobLike(text: string): Uint8Array & { transformToString: (encoding?: string) => string } {
+  const bytes = encoder.encode(text);
+  return Object.assign(bytes, { transformToString: (enc = 'utf-8') => new TextDecoder(enc).decode(bytes) });
+}
+
 async function* transform<T>(events: AsyncIterable<T>, map: (ev: T) => T[], end: () => T[], done: () => void): AsyncGenerator<T> {
   for await (const ev of events) yield* map(ev);
   yield* end();
@@ -120,7 +126,7 @@ export function wrapBedrockClient<T extends BedrockRuntimeLikeClient>(client: T,
     if (name === 'ConverseCommand' || name === 'InvokeModelCommand') {
       const out =
         name === 'InvokeModelCommand'
-          ? { ...result, body: encoder.encode(JSON.stringify(session.unmaskValue(JSON.parse(responseText(result.body))))) }
+          ? { ...result, body: blobLike(JSON.stringify(session.unmaskValue(JSON.parse(responseText(result.body))))) }
           : session.unmaskValue(result);
       done();
       return out;

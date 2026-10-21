@@ -147,6 +147,8 @@ export const DETECTOR_PACKS: Record<string, DetectorPattern[]> = {
 
   /** Indian health identifiers (ABDM) and hospital record numbers. */
   'health-in': [
+    // The hyphenated 2-4-4-4 ABHA format is matched without a cue: other numbers in that exact
+    // format (some case or reference numbers) are masked too. Over-masking is the safe side.
     { type: 'ABHA_NUMBER', regex: /(?<![\d-])\d{2}-\d{4}-\d{4}-\d{4}(?![\d-])/g, confidence: 0.95 },
     { type: 'ABHA_NUMBER', regex: /(?<!\d)\d{14}(?!\d)/g, confidence: 0.96, context: cue('abha|health id|ndhm|abdm') },
     { type: 'ABHA_ADDRESS', regex: /\b[A-Za-z0-9._]{3,32}@(?:abdm|sbx|ndhm)\b/g, confidence: 0.98 },

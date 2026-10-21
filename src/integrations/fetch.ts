@@ -1,6 +1,6 @@
 import type { Vela } from '../core/vela.js';
 import { VelaError, VelaRouteBlockedError } from '../core/errors.js';
-import { auditBlocked, forwardFieldsRequest, forwardLlmRequest } from './gateway.js';
+import { AuditTrail, auditBlocked, forwardFieldsRequest, forwardLlmRequest } from './gateway.js';
 import { classifyRoute } from './formats.js';
 import type { FetchInterceptorOptions } from '../types.js';
 
@@ -76,6 +76,10 @@ export function createFetchInterceptor(vela: Vela, opts: FetchInterceptorOptions
         const err = new VelaRouteBlockedError(method, url.pathname, route.reason);
         auditBlocked(vela, method, url.origin + url.pathname, err);
         throw err;
+      }
+      if (provider && route.kind === 'blocked') {
+        // passthrough 'all': record the unmasked forward, and fail closed if the audit sink is down.
+        await new AuditTrail(vela, { method, url: url.origin + url.pathname, format: 'unmasked-passthrough' }).request(vela.createSession());
       }
       // Body-free methods on a provider host: drop any body so nothing rides along unmasked.
       if (provider && route.kind === 'safe' && (init?.body != null || (isRequest && (input as Request).body !== null))) {

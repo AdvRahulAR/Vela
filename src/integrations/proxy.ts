@@ -6,7 +6,7 @@ import type { Vela } from '../core/vela.js';
 import { DEFAULT_ANTHROPIC_URL, DEFAULT_GEMINI_URL, DEFAULT_PROXY_HOST, DEFAULT_PROXY_PORT, DEFAULT_UPSTREAM_URL, PACKAGE_VERSION } from '../config/constants.js';
 import { Logger } from '../utils/logger.js';
 import { classifyRoute, detectApiFormat } from './formats.js';
-import { auditBlocked, selectApiKey, forwardFieldsRequest, forwardLlmRequest, forwardPassthrough, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
+import { AuditTrail, auditBlocked, selectApiKey, forwardFieldsRequest, forwardLlmRequest, forwardPassthrough, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
 import type { ProxyServerOptions } from '../types.js';
 import { VelaMetrics } from './metrics.js';
 
@@ -206,6 +206,11 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
     const key = selectApiKey(opts, forward.url, route.kind === 'llm' ? route.format : null);
     const fwdOpts = { ...(key ? { apiKey: key } : {}), ...(tenant ? { tenant } : {}) };
     try {
+      if (route.kind === 'blocked') {
+        // passthrough 'all': record the unmasked forward, and fail closed if the audit sink is down.
+        const trail = new AuditTrail(vela, { method, url: forward.url, format: 'unmasked-passthrough', ...(tenant ? { tenant } : {}) });
+        await trail.request(vela.createSession());
+      }
       const response =
         route.kind === 'llm'
           ? await forwardLlmRequest(vela, forward, fwdOpts)

@@ -131,7 +131,7 @@ Bedrock requests are signed (SigV4), so a proxy can't change them. The wrapper m
 
 ### Google Gemini / Vertex AI
 
-Point the Gemini client at the proxy (or use the fetch interceptor). `…:generateContent`, `…:streamGenerateContent` (JSON or `alt=sse`) and `…:countTokens` are masked and restored, including function calls. Without `--upstream`, Gemini paths go to `generativelanguage.googleapis.com`, and `--api-key` is sent as `x-goog-api-key`.
+Point the Gemini client at the proxy (or use the fetch interceptor). `…:generateContent`, `…:streamGenerateContent` (JSON or `alt=sse`) and `…:countTokens` are masked and restored, including function calls. Without `--upstream`, Gemini paths go to `generativelanguage.googleapis.com`, and `--gemini-api-key` (or `VELA_GEMINI_API_KEY`) is sent as `x-goog-api-key`. `--api-key` is not sent to Gemini unless `--upstream` is set.
 
 ### Global fetch interceptor
 
@@ -148,7 +148,7 @@ Intercepts `POST …/chat/completions`, `…/responses` and `…/messages`, incl
 app.use(createExpressMiddleware(new Vela(), { upstream: 'https://api.openai.com', apiKey: process.env.OPENAI_API_KEY }));
 ```
 
-Works with or without `express.json()`. Query strings and provider headers (`anthropic-version`, `openai-organization`, …) are forwarded. `apiKey` is sent as `x-api-key` for Anthropic and as `Authorization: Bearer` otherwise.
+Works with or without `express.json()`. Query strings and provider headers (`anthropic-version`, `openai-organization`, …) are forwarded. With `upstream` set, `apiKey` goes to that upstream (as `x-api-key` for Anthropic, `x-goog-api-key` for Gemini, `Authorization: Bearer` otherwise). Without it, Anthropic and Gemini paths are routed to their own APIs and get only their own key from `apiKeys`; `apiKey` goes only to OpenAI.
 
 ### Standalone proxy & CLI
 

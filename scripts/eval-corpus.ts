@@ -20,6 +20,10 @@ import {
 import { PACKAGE_VERSION } from '../src/config/constants.js';
 
 const generated = process.argv.includes('--generated');
+if (process.argv.includes('--report') && !generated) {
+  console.error('--report describes the synthetic corpus: use it with --generated');
+  process.exit(1);
+}
 const r = evaluateCorpus(generated ? loadCorpus(GENERATED_DIR) : loadCorpus());
 const rows = Object.entries(r.byType).sort(([a], [b]) => a.localeCompare(b));
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;

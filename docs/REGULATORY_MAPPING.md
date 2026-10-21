@@ -24,7 +24,7 @@ Each row has three columns:
 
 | Obligation | Relevant Vela controls | Notes |
 |---|---|---|
-| **DPDP Act 2023, s. 8(5)** (reasonable security safeguards to prevent a personal data breach) and the **DPDP Rules 2025** safeguard list (encryption, obfuscation, masking, access logs, retention of logs) | Masking and FPE, audit trail, fail-closed processing, `dpdp-baseline` preset | Logs show *that* masking happened, not what was masked. Keep them for the period your Rules analysis requires. |
+| **DPDP Act 2023, s. 8(5)** (reasonable security safeguards to prevent a personal data breach) and the **DPDP Rules 2025** safeguard list (encryption, obfuscation, masking, access logs, retention of logs) | Masking and FPE, audit trail, fail-closed processing, `dpdp-baseline` preset | **Forthcoming:** under the commencement notifications, s. 8 and the Rules' safeguard provisions (Rule 6) apply from 13 May 2027, so treat these controls as preparation for that date (check the current notification). Logs show *that* masking happened, not what was masked. Keep them for the period your Rules analysis requires. |
 | **DPDP Act s. 8(2)** (engaging a data processor only under a valid contract) | Provider allowlist ensures only contracted providers are used | The contract itself is yours |
 | **DPDP Act s. 16** (transfers outside India, subject to Central Government restrictions) | `providers.allow` pinned to in-region endpoints (e.g. Azure India, Bedrock `ap-south-1`) | Confirm where the provider actually processes and stores data |
 | **DPDP Act s. 8(6)** (breach intimation) | Less personal data reaches the provider, so there is less to report if the provider is breached | Breach response remains yours |
@@ -38,7 +38,7 @@ Each row has three columns:
 | Obligation | Relevant Vela controls | Notes |
 |---|---|---|
 | **GDPR Art. 4(5), 25, 32** (pseudonymisation, privacy by design, security of processing) | FPE and placeholders, key in KMS, `gdpr-pseudonymise` preset, `eu-uk` pack | Pseudonymised data is still personal data for you. EDPB Guidelines 01/2025 describe pseudonymisation good practice. |
-| **GDPR, the recipient's view.** In *EDPS v SRB* (C‑413/23 P, 4 September 2025), the CJEU held that pseudonymised data may not be personal data for a recipient that cannot reasonably re-identify it | Per-request random tweaks, no shared maps, provider never holds the key | Context in the prompt can still identify people. Assess this per use case. |
+| **GDPR, the recipient's view.** In *EDPS v SRB* (C‑413/23 P, 4 September 2025), the CJEU held that pseudonymised data may not be personal data for a recipient that cannot reasonably re-identify it | Per-request random tweaks, no shared maps, provider never holds the key | Context in the prompt can still identify people. Assess this per use case. The judgment also held that the controller's duty to inform data subjects is assessed at collection, so a recipient's inability to re-identify does not remove your transparency duties. |
 | **GDPR Art. 30** (records of processing) | Audit events give per-request evidence of the safeguard | The record of processing activities is yours |
 | **GDPR Art. 9** (special categories) | NER via Presidio; `block` for types your recognizer labels | Built-in detectors don't classify health, religion or similar *topics* |
 | **EU AI Act** (data governance and logging duties for high-risk systems) | Audit trail, policy versioning | Classification of your system, conformity assessment |

@@ -192,9 +192,9 @@ Ship these as opt-in **detector packs** (`vela-privacy/packs/pci`, `…/india-bf
 
 Compliance buyers don't buy masking; they buy **a control they can show to an auditor**. The pitch should be:
 
-> Personal data and secrets are removed before any prompt leaves your network, nothing is stored, every request leaves a value-free audit record, and the policy is a versioned file your DPO signs off.
+> Personal data and secrets are removed before any prompt leaves your network, original values and replacement maps are never stored, every request leaves a value-free audit record (metadata only, kept by the audit sink you configure), and the policy is a versioned file your DPO signs off.
 
-Lead with: zero retention, fail-closed by default, India-first identifiers, a mapping to the regulations, and audit evidence. Mention FF1 and post-quantum key exchange as supporting detail.
+Lead with: no retention of personal data (only value-free audit metadata is kept), fail-closed by default, India-first identifiers, a mapping to the regulations, and audit evidence. Mention FF1 and post-quantum key exchange as supporting detail.
 
 ### 3.2 A regulatory mapping document (`docs/REGULATORY_MAPPING.md`)
 

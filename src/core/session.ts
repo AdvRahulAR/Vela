@@ -265,7 +265,17 @@ export class MaskSession {
       // A signed thinking block must reach the provider exactly as it produced it. That is only
       // safe when the client never saw real values in it (restore.thinking: 'placeholders');
       // otherwise its text is masked like any other text and the provider may reject the signature.
-      if (o.type === 'thinking' && typeof o.signature === 'string' && this.engine.restore?.thinking === 'placeholders') return value;
+      // The exemption is decided by value too: thinking text that still holds detectable personal
+      // data is masked (breaking the signature) rather than sent as-is.
+      if (
+        o.type === 'thinking' &&
+        typeof o.signature === 'string' &&
+        typeof o.thinking === 'string' &&
+        this.engine.restore?.thinking === 'placeholders' &&
+        this.maskText(o.thinking, undefined, true) === o.thinking
+      ) {
+        return value;
+      }
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(o)) {
         // Credentials the caller deliberately gives the provider for remote MCP servers.
