@@ -236,10 +236,12 @@ export function runProxy(vela: Vela, opts: ProxyServerOptions = {}): Server {
   const server: Server = opts.tls ? (createHttpsServer({ cert: opts.tls.cert, key: opts.tls.key }, handler) as unknown as Server) : createServer(handler);
 
   server.listen(port, host, () => {
+    const addr = server.address();
+    const actualPort = typeof addr === 'object' && addr ? addr.port : port;
     const shown = host.includes(':') ? `[${host}]` : host;
-    logger.info('server_started', { host, port, upstream });
+    logger.info('server_started', { host, port: actualPort, upstream });
     /* eslint-disable no-console -- operator-facing startup banner, independent of enableLogging */
-    console.log(`[vela] Privacy proxy active on ${opts.tls ? 'https' : 'http'}://${shown}:${port}`);
+    console.log(`[vela] Privacy proxy active on ${opts.tls ? 'https' : 'http'}://${shown}:${actualPort}`);
     if (authenticate) console.log(`[vela] Clients must send ${AUTH_HEADER}: <token>`);
     console.log(`[vela] Forwarding upstream to ${upstream}`);
     if (passthrough === 'all') {

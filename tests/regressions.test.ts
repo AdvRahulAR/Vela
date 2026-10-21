@@ -364,11 +364,21 @@ function mockUpstream(): { server: Server; seen: Array<{ url: string; headers: R
 }
 
 describe('Proxy / fetch / Express', () => {
-  it('proxy binds to 127.0.0.1 by default', async () => {
-    const p = runProxy(vela, { port: 0 });
-    await new Promise((r) => p.once('listening', r));
-    assert.equal((p.address() as AddressInfo).address, '127.0.0.1');
-    p.close();
+  it('proxy binds to 127.0.0.1 by default and logs assigned port on port 0', async () => {
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(' ')); };
+    try {
+      const p = runProxy(vela, { port: 0 });
+      await new Promise((r) => p.once('listening', r));
+      const addr = p.address() as AddressInfo;
+      assert.equal(addr.address, '127.0.0.1');
+      assert.ok(addr.port > 0);
+      assert.ok(logs.some((l) => l.includes(`127.0.0.1:${addr.port}`)), `Expected banner to show actual port, got: ${logs.join('; ')}`);
+      p.close();
+    } finally {
+      console.log = origLog;
+    }
   });
 
   it('proxy: JSON + SSE round trip, UTF-8 safe, session header stripped, Anthropic key header', async () => {
