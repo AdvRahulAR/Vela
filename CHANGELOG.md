@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+**Fixed**
+- **Proxy port banner:** when started on port 0, the startup console banner and `server_started` structured log now report the actual OS-assigned ephemeral port instead of `0`.
+
 ## 0.5.0
 
 Compliance controls: policies, audit evidence, detector packs, synthetic-safe FPE, key providers and proxy hardening. Built from the findings in `docs/COMPLIANCE_AUDIT.md`.
