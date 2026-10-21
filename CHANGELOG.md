@@ -1,5 +1,109 @@
 # Changelog
 
+## 0.5.0
+
+Compliance controls: policies, audit evidence, detector packs, synthetic-safe FPE, key providers and proxy hardening. Built from the findings in `docs/COMPLIANCE_AUDIT.md`.
+
+**Breaking**
+- Node 22 or newer is required (Node 18 and 20 are end-of-life).
+- `Replacement.method` can now be `'redact'`.
+- A non-loopback proxy `host` without `authTokens` throws unless `insecure: true` (CLI: `--insecure`). Previously it only warned.
+- Unknown string fields in requests (`user`, `metadata`…) are now masked by the residual pass (shipped in 0.4.1's second round).
+- **Upstream keys:** without `upstream`, the proxy and Express middleware send `apiKey` only to OpenAI. Anthropic and Gemini requests get their own key from `apiKeys` (CLI `--anthropic-api-key`, `--gemini-api-key`) or none. Before, one key went to every provider.
+- `/metrics` has no tenant labels unless `metricsTenantLabels: true`.
+
+**Added**
+- **Policies** (`policy` option, `loadPolicy`, `validatePolicy`, `policyHash`, `POLICY_PRESETS`, `resolvePolicy`; CLI `--policy`, `vela policy`, `vela policies`):
+  - Policies are JSON or YAML.
+  - Per-entity actions: `fpe`, `fpe-synthetic`, `token`, `redact`, `block`, `allow`.
+  - Request rules: provider and model allowlists, `nonText: block`, restore policy, `ner.required` and detector packs.
+  - Unknown keys and actions are errors.
+  - Presets: `dpdp-baseline`, `india-bfsi`, `pci`, `hipaa-safe-harbor`, `gdpr-pseudonymise`.
+  - JSON Schema in `schemas/vela-policy.schema.json`; example in `examples/policies/bank.yaml`.
+  - New `yaml` dependency.
+- **Detector packs** (`packs` option, `DETECTOR_PACKS`; CLI `--packs`, `vela packs`): `pci`, `india-bfsi`, `health-in`, `us`, `eu-uk`, `intl`, each with corpus cases and a ReDoS check. `DetectorPattern` is exported for your own packs.
+- **Synthetic-safe FPE** (`fpe-synthetic`, `invalidateCheck`): Aadhaar, card, GSTIN and IBAN ciphertext with a deliberately invalid check character.
+- **Key providers** (`Vela.create({ keyProvider })`):
+  - `envKeyProvider`, `envelopeKeyProvider`, `awsKmsKeyProvider`, `azureKeyVaultKeyProvider`, `gcpKmsKeyProvider`, `vaultTransitKeyProvider`;
+  - duck-typed, so they add no dependencies;
+  - the key id goes into audit events.
+- **Proxy hardening:**
+  - client tokens (`authTokens`, `--auth-token-file`, header `x-vela-key`) with tenants;
+  - per-client rate limits (`rateLimitPerMinute`, `--rate-limit`);
+  - HTTPS (`tls`, `--tls-cert`/`--tls-key`);
+  - caller session ids bound to the tenant.
+- CLI: `vela audit verify <file> [--head <hash>]`, `--audit-log`, `--audit-stdout`, `VELA_UPSTREAM_API_KEY`.
+- **Providers:**
+  - Google Gemini / Vertex AI (`generateContent`, `streamGenerateContent` as JSON or SSE, `countTokens`) through the proxy and fetch interceptor;
+  - AWS Bedrock through `wrapBedrockClient`: Converse and ConverseStream, plus InvokeModel and InvokeModelWithResponseStream for Anthropic models; other commands are blocked.
+- **Operations:**
+  - Prometheus `/metrics` built from audit events (counts only);
+  - `/readyz` that checks the NER service;
+  - `vela.onEvent()` observers;
+  - a Dockerfile and a Helm chart (`deploy/helm/vela`).
+- **Detection evidence:**
+  - a seeded synthetic corpus (`npm run gen-corpus`) of about 2,400 labelled entities with a CI gate;
+  - `npm run eval -- --generated --report` writes `docs/DETECTION_REPORT.md` with 95% Wilson intervals.
+- **Detection fixes found by the corpus:**
+  - UPI IDs at the end of a sentence were not detected and were sent in clear text;
+  - Hinglish phone cues ("ka number");
+  - names with an unknown first name and a known surname;
+  - labelled addresses no longer run past the PIN code into the sentence.
+- **Fixes from reviewing the new controls** (`docs/solutions/review-050.md`):
+  - SDK wrappers no longer let raw `client.get`/`delete` through;
+  - redactions can't be restored through any path;
+  - the restore policy covers `parsed_arguments` and all Responses tool deltas;
+  - the residual pass decides by value and masks free-form keys;
+  - signed thinking blocks and MCP credentials are preserved;
+  - the audit chain survives a failed write;
+  - SDK wrappers write audit events;
+  - unknown policy entity types are rejected;
+  - failed proxy logins are rate-limited.
+- **Fixes from reviewing the provider work:**
+  - the Vertex global endpoint (`aiplatform.googleapis.com`) gets provider route rules;
+  - Gemini `thought` parts follow the thinking restore policy;
+  - keys are sent only to their own provider;
+  - Gemini model allowlists use the model in the path;
+  - Bedrock image and document bytes pass through intact, and text documents are masked;
+  - `/readyz` results are cached for 5 seconds.
+- Docs: `docs/REGULATORY_MAPPING.md`, `docs/DETECTION_REPORT.md`.
+
+- **Audit events** (`audit` option, `jsonlFileSink`, `consoleSink`, `verifyAuditChain`):
+  - Each request records a value-free `vela.request` event before anything is sent, and a `vela.response` event when the response completes. Blocked requests record `vela.blocked`, failed ones `vela.error`.
+  - Events carry route, model, entity counts by type, actions, NER status, restore counts per field, key id and latency, and never values.
+  - `jsonlFileSink` hash-chains events so edits and deletions are detectable.
+  - If the sink fails before forwarding, the request is rejected (HTTP 503, `VelaAuditError`).
+  - Responses carry `x-vela-request-id`.
+- **Restore policy** (`restore: { toolArguments: 'placeholders' }`): placeholders in tool-call arguments (or thinking, or content) can be left unrestored, so a prompt-injected model can't put a real value into an automatically executed tool call. `session.restoreReport` counts restored and kept placeholders per field.
+- A caller-chosen session id is bound to the authenticated tenant when there is one.
+
+## 0.4.1
+
+**Security fix: unmasked requests through unrecognised routes.** Found by the compliance audit (`docs/COMPLIANCE_AUDIT.md`, F1 and F2). Upgrade if you use the proxy, the fetch interceptor or a client wrapper.
+
+- **Proxy:** routes Vela didn't recognise were forwarded with their text unmasked, including Anthropic `/v1/messages/count_tokens` and Message Batches, OpenAI legacy `/v1/completions`, `/v1/moderations` and Assistants thread messages. Now:
+  - `count_tokens` and `/v1/responses/input_tokens` are masked like the requests they count;
+  - `/completions` prompts and `/moderations` input are masked (streaming legacy completions is rejected);
+  - any other route that carries a body is **rejected with HTTP 403** (`VelaRouteBlockedError`) and nothing is sent.
+  - Body-free requests (`GET /v1/models`) still pass. The new `passthrough` modes are `'safe'` (default), `'none'` and `'all'`. `'all'` (or `true`) restores the old behaviour as an explicit opt-in. CLI: `--passthrough safe|none|all`.
+- **Fetch interceptor:** a request body that wasn't a string or `Uint8Array` (a `Blob`, `ArrayBuffer`, `ReadableStream`…) was sent unmasked. Every body type is now read and masked. An LLM request whose body isn't valid JSON throws instead of being sent. On known provider hosts, the route rules above apply (`passthrough: 'all'` opts out).
+- **Client wrappers:** methods other than `create` went to the provider unmasked.
+  - Now masked:
+    - OpenAI `chat.completions.parse`, `responses.parse`, `responses.inputTokens.count`, `completions.create`, `embeddings.create` and `moderations.create`;
+    - Anthropic `messages.countTokens` and `beta.messages.create`/`countTokens`.
+  - Now throw `VelaRouteBlockedError`: methods Vela can't mask (`stream()` helpers, batches, file uploads, audio, image generation, Assistants threads).
+- **Residual masking backstop:** after the format-aware walk, any detected value left in a field Vela didn't know was text is masked as well. That covers OpenAI `user`, `metadata`, message `name`, legacy `suffix`, nested embedding arrays, and the bodies of future API fields. Identifiers and opaque blobs (`model`, `id`, `type`, `signature`, base64 `data`…) are never touched.
+- **Client wrappers are now allowlists:** a method that is neither wrapped nor read-only (`list`, `retrieve`, `del`, `cancel`…) throws `VelaRouteBlockedError`. This covers SDK helpers Vela doesn't know, Anthropic legacy `completions.create` (now masked) and raw `client.post`.
+- More fail-closed route rules:
+  - percent-encoded paths are blocked;
+  - Ollama's native `/api/chat|generate|embed` routes are blocked when Ollama is listed as a provider (use its `/v1` routes);
+  - the fetch interceptor applies provider rules to hosts listed in `providers`, Azure AI Foundry and Cognitive Services hosts, and hostnames with a trailing dot;
+  - bodies sent with DELETE, OPTIONS or `…/cancel` to a provider are dropped;
+  - `POST …/cancel` without a body keeps working.
+- Proxy: requests carrying `anthropic-version` (e.g. `GET /v1/models` from the Anthropic SDK) go to api.anthropic.com when no `--upstream` is set, so an Anthropic key is no longer sent to OpenAI.
+- New exports: `classifyRoute`, `maskFieldsAsync`, `forwardFieldsRequest`, `VelaRouteBlockedError`.
+- Docs: corpus results are stated as counts, not recall percentages; threat model and reviewer guide updated (new fail-open checklist).
+
 ## 0.4.0
 
 NER services as a first-class, fail-closed detection path.

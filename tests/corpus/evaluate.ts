@@ -9,6 +9,19 @@ import { detectPii } from '../../src/index.js';
 
 export const CORPUS_DIR = __dirname;
 export const BASELINE_PATH = join(CORPUS_DIR, 'baseline.json');
+/** Synthetic corpus written by `npm run gen-corpus`. */
+export const GENERATED_DIR = join(CORPUS_DIR, 'generated');
+export const GENERATED_BASELINE_PATH = join(GENERATED_DIR, 'baseline.json');
+
+/** Wilson score interval (95% by default) for k successes out of n. */
+export function wilson(k: number, n: number, z = 1.96): [number, number] {
+  if (n === 0) return [0, 1];
+  const p = k / n;
+  const d = 1 + (z * z) / n;
+  const centre = p + (z * z) / (2 * n);
+  const margin = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n));
+  return [Math.max(0, (centre - margin) / d), Math.min(1, (centre + margin) / d)];
+}
 
 /** Types whose recall must stay at 100%: deterministic formats with no excuse to miss. */
 export const STRICT_TYPES = [
@@ -38,10 +51,10 @@ export interface CorpusReport {
   extras: Array<{ file: string; text: string; type: string; value: string }>;
 }
 
-export function loadCorpus(): Case[] {
+export function loadCorpus(dir = CORPUS_DIR): Case[] {
   const out: Case[] = [];
-  for (const f of readdirSync(CORPUS_DIR).filter((n) => n.endsWith('.jsonl')).sort()) {
-    const lines = readFileSync(join(CORPUS_DIR, f), 'utf8').split(/\r?\n/);
+  for (const f of readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort()) {
+    const lines = readFileSync(join(dir, f), 'utf8').split(/\r?\n/);
     lines.forEach((line, i) => {
       if (!line.trim()) return;
       try {

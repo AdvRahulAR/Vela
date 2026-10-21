@@ -408,3 +408,44 @@ export class FpeMasker {
     }
   }
 }
+
+/**
+ * Synthetic-safe output (policy action `fpe-synthetic`): change the check
+ * character of a format-preserved ciphertext so it fails validation and can't
+ * be a real person's identifier. Returns null for types without a check
+ * character (PAN, phone…), which then fall back to a placeholder.
+ */
+export function invalidateCheck(type: EntityType, ciphertext: string): string | null {
+  const chars = Array.from(ciphertext);
+  const lastIdx = (re: RegExp): number => {
+    for (let i = chars.length - 1; i >= 0; i--) if (re.test(chars[i] as string)) return i;
+    return -1;
+  };
+  switch (type) {
+    case 'AADHAAR':
+    case 'CREDIT_CARD': {
+      // Verhoeff and Luhn both detect every single-digit change.
+      const i = lastIdx(/\d/);
+      if (i < 0) return null;
+      chars[i] = String((Number(chars[i]) + 5) % 10);
+      return chars.join('');
+    }
+    case 'GSTIN': {
+      if (chars.length !== 15) return null;
+      const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      const c = (chars[14] as string).toUpperCase();
+      chars[14] = alphabet[(alphabet.indexOf(c) + 1) % alphabet.length] as string;
+      return chars.join('');
+    }
+    case 'IBAN': {
+      // Check digits are characters 3-4 (after the country code); any change breaks mod-97.
+      const d = chars.map((c, i) => (/\d/.test(c) ? i : -1)).filter((i) => i >= 0);
+      const i = d[1];
+      if (i === undefined) return null;
+      chars[i] = String((Number(chars[i]) + 1) % 10);
+      return chars.join('');
+    }
+    default:
+      return null;
+  }
+}

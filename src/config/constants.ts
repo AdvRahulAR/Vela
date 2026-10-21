@@ -38,7 +38,7 @@ export const STANDARD_ENTITY_TYPES: ReadonlySet<EntityType> = new Set<StandardEn
   'SECRET_KEY', 'JWT', 'MAC_ADDRESS', 'PERSON', 'LOCATION', 'ORG', 'CUSTOM',
 ]);
 
-export const PACKAGE_VERSION = '0.4.0';
+export const PACKAGE_VERSION = '0.5.0';
 
 export const DIGITS = '0123456789';
 export const UPPER_ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -52,6 +52,7 @@ export const DEFAULT_PROXY_HOST = '127.0.0.1';
 export const SESSION_HEADER = 'x-vela-session';
 export const DEFAULT_UPSTREAM_URL = 'https://api.openai.com';
 export const DEFAULT_ANTHROPIC_URL = 'https://api.anthropic.com';
+export const DEFAULT_GEMINI_URL = 'https://generativelanguage.googleapis.com';
 
 export const LLM_REQUEST_PATHS = [
   '/chat/completions',

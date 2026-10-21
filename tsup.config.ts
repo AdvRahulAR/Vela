@@ -1,8 +1,8 @@
 import { defineConfig } from 'tsup';
 
 // @noble/* packages are ESM-only. Bundle them into the CommonJS outputs so
-// `require('vela-privacy')` works on every supported Node version (Node 18+),
-// not just those with require(esm) support (20.19+ / 22.12+).
+// `require('vela-privacy')` works on every supported Node version (Node 22+),
+// including 22.0-22.11, which lack require(esm).
 const NOBLE = [/^@noble\//];
 
 export default defineConfig([

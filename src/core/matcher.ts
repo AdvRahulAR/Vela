@@ -102,9 +102,18 @@ export function replacementsFrom(results: MaskResult | MaskResult[]): Replacemen
   return [...seen.values()];
 }
 
+/** Where restored text goes. Used by the restore policy and the restoration report. */
+export type RestoreField = 'content' | 'tool_args' | 'thinking';
+
 export interface RestoreOptions {
   /** The text is (part of) a JSON-encoded string: escape restored values. */
   json?: boolean;
+  /** Which part of the response this text belongs to. Default: 'content'. */
+  field?: RestoreField;
+  /** Find placeholders but leave them as they are (restore policy 'placeholders'). */
+  keep?: boolean;
+  /** Called once per placeholder found (restored, or kept when `keep` is set). */
+  onMatch?: (rep: Replacement) => void;
 }
 
 /**
@@ -118,8 +127,9 @@ export class Restorer {
   private readonly window: number;
 
   constructor(replacements: Replacement[]) {
+    // Redactions are never restored, whichever path built the restorer.
     this.targets = replacements
-      .filter((r) => r.masked.length > 0)
+      .filter((r) => r.masked.length > 0 && r.method !== 'redact')
       .sort((a, b) => b.masked.length - a.masked.length)
       .map(buildTarget);
     const branches: Array<[Target, string]> = [
@@ -164,9 +174,11 @@ export class Restorer {
       const target = this.groups[idx - 1];
       if (!target) continue;
       const original = target.rep.original;
-      out += buf.slice(pos, m.index) + (opts.json ? JSON.stringify(original).slice(1, -1) : original);
+      const replacement = opts.keep ? m[0] : opts.json ? JSON.stringify(original).slice(1, -1) : original;
+      out += buf.slice(pos, m.index) + replacement;
       pos = m.index + m[0].length;
-      count++;
+      opts.onMatch?.(target.rep);
+      if (!opts.keep) count++;
     }
     if (final) return { out: out + buf.slice(pos), rest: '', count };
     const hold = holdFrom ?? this.holdStart(buf, pos);

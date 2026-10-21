@@ -115,6 +115,12 @@ export interface VelaConfig {
   recognizerFailure?: 'block' | 'continue';
   /** Timeout for one async recognizer call, in milliseconds. Default: 5000. */
   recognizerTimeoutMs?: number;
+  /**
+   * Detector packs to enable: 'pci' (CVV, expiry, track data), 'india-bfsi'
+   * (CKYC, UAN, demat, CIN, DIN, TAN, LEI, MICR, SWIFT, vehicle registration),
+   * 'health-in' (ABHA, MRN/UHID), 'us', 'eu-uk', 'intl'. See `DETECTOR_PACKS`.
+   */
+  packs?: string[];
   /** Extra recognizers (e.g. NER models) run alongside the built-in detectors. */
   recognizers?: EntityRecognizer[];
   /**
@@ -135,6 +141,34 @@ export interface VelaConfig {
    * than tying up the event loop. Default: 2,000,000 characters.
    */
   maxInputChars?: number;
+  /**
+   * Whether placeholders in each part of a response are restored. Set
+   * `toolArguments: 'placeholders'` when tool calls run automatically, so a
+   * prompt-injected model can't put a real value into a tool call. Default:
+   * everything restored.
+   */
+  restore?: import('./core/session.js').RestorePolicy;
+  /**
+   * Audit sink. The proxy, fetch interceptor and Express middleware send it a
+   * value-free event before each request is forwarded and another when the
+   * response completes (see `jsonlFileSink`). If the sink throws before
+   * forwarding, the request is rejected (HTTP 503) and nothing is sent.
+   */
+  audit?: import('./core/audit.js').AuditSink;
+  /**
+   * Declarative masking policy (see `loadPolicy()` and `POLICY_PRESETS`):
+   * per-entity actions (fpe, fpe-synthetic, token, redact, block, allow),
+   * provider and model allowlists, non-text content, restore policy, NER
+   * requirement and detector packs. Its id and hash go into audit events.
+   */
+  policy?: import('./core/policy.js').VelaPolicy;
+  /**
+   * Entity types your own recognizers (sync or async) can return, so a policy
+   * may name them. Policy entries for any other unknown type are an error.
+   */
+  extraEntityTypes?: string[];
+  /** Identifier of the FPE key, recorded in audit events (never the key itself). */
+  keyId?: string;
   /** Enable structured JSON logging. Default: false. */
   enableLogging?: boolean;
 }
@@ -163,7 +197,8 @@ export interface Replacement {
   /** The real value. */
   original: string;
   type: EntityType;
-  method: 'fpe' | 'token';
+  /** 'redact' placeholders are never restored. */
+  method: 'fpe' | 'token' | 'redact';
 }
 
 export interface MaskResult {
@@ -257,19 +292,30 @@ export interface OpenAIResponse {
   [key: string]: unknown;
 }
 
-export type LlmApiFormat = 'openai-chat' | 'openai-responses' | 'anthropic-messages';
+export type LlmApiFormat = 'openai-chat' | 'openai-responses' | 'anthropic-messages' | 'gemini' | 'bedrock-converse';
 
 export interface FetchInterceptorOptions {
   providers?: string[];
   targetUrls?: string[];
   /** Resolve a stable session id for a request (alternatively send an `x-vela-session` header). */
   sessionId?: (url: string, init?: RequestInit) => string | undefined;
+  /**
+   * Routes on a known provider host that Vela can't mask (batches, files,
+   * unknown endpoints): 'safe' (default) throws `VelaRouteBlockedError`;
+   * 'all' sends them unmasked.
+   */
+  passthrough?: 'safe' | 'all';
 }
 
 export interface ExpressMiddlewareOptions {
   upstream?: string;
-  /** Upstream API key. Sent as `Authorization: Bearer` (OpenAI) or `x-api-key` (Anthropic). */
+  /**
+   * Upstream API key. With `upstream` set, it is sent to that upstream. Without
+   * it, only OpenAI requests get it; set `apiKeys` for Anthropic and Gemini.
+   */
   apiKey?: string;
+  /** Per-provider keys for auto-routed requests (no `upstream`). A provider without a key gets none. */
+  apiKeys?: Partial<Record<'openai' | 'anthropic' | 'gemini', string>>;
 }
 
 export interface ProxyServerOptions {
@@ -277,9 +323,41 @@ export interface ProxyServerOptions {
   /** Interface to bind. Default: 127.0.0.1 (loopback only). Use 0.0.0.0 to expose deliberately. */
   host?: string;
   upstream?: string;
-  /** Upstream API key. Sent as `Authorization: Bearer` (OpenAI) or `x-api-key` (Anthropic). */
+  /**
+   * Upstream API key. With `upstream` set, it is sent to that upstream. Without
+   * it, only OpenAI requests get it; set `apiKeys` for Anthropic and Gemini.
+   */
   apiKey?: string;
+  /** Per-provider keys for auto-routed requests (no `upstream`). A provider without a key gets none. */
+  apiKeys?: Partial<Record<'openai' | 'anthropic' | 'gemini', string>>;
   maxBodySizeBytes?: number;
-  /** Forward non-chat routes (/v1/models, /v1/embeddings…) upstream. Default: true. Set false to 404 them. */
-  passthrough?: boolean;
+  /**
+   * Routes Vela cannot mask:
+   * - 'safe' (default): body-free requests (GET /v1/models, DELETE …) are forwarded;
+   *   any other route Vela can't mask (batches, files, audio, unknown endpoints) gets 403.
+   * - 'none' (or `false`): only maskable routes are served; everything else gets 404.
+   * - 'all' (or `true`): unknown routes are forwarded **unmasked**. Opt in only if you accept that.
+   * Chat, Responses, Messages, count_tokens, embeddings, moderations and legacy
+   * completions are always masked.
+   */
+  passthrough?: boolean | 'safe' | 'all' | 'none';
+  /**
+   * Client tokens, mapped to a tenant name. Clients send `x-vela-key: <token>`;
+   * the tenant is recorded in audit events and bound into session ids. Required
+   * to listen beyond loopback (unless `insecure`).
+   */
+  authTokens?: Record<string, string>;
+  /** Allow a non-loopback `host` without `authTokens` (only behind something that authenticates). */
+  insecure?: boolean;
+  /** Requests per minute per tenant (or client IP without auth). Excess gets HTTP 429. */
+  rateLimitPerMinute?: number;
+  /**
+   * Serve Prometheus metrics (counts only) at `GET /metrics`. Default: true.
+   * `/metrics`, `/health` and `/readyz` don't need a client token.
+   */
+  metrics?: boolean;
+  /** Label metrics by tenant. Default false, because `/metrics` needs no token. */
+  metricsTenantLabels?: boolean;
+  /** Serve HTTPS with this certificate and key (PEM). */
+  tls?: { cert: string | Buffer; key: string | Buffer };
 }

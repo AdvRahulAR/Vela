@@ -45,3 +45,35 @@ export class VelaNotPreparedError extends VelaError {
     );
   }
 }
+
+/**
+ * The request goes to a route Vela cannot mask and restore (batches, files,
+ * audio, an endpoint it doesn't know). It was rejected and nothing was sent.
+ */
+export class VelaRouteBlockedError extends VelaError {
+  readonly route: string;
+  constructor(method: string, route: string, reason: string) {
+    super(`Vela blocked ${method} ${route}: ${reason}. Nothing was sent upstream.`, 403);
+    this.route = route;
+  }
+}
+
+/** The audit sink failed before the request was forwarded. Nothing was sent. */
+export class VelaAuditError extends VelaError {
+  readonly cause: unknown;
+  constructor(cause: unknown) {
+    super('Audit log unavailable; request not forwarded', 503);
+    this.cause = cause;
+  }
+}
+
+/**
+ * The masking policy rejected the request: a blocked entity type (422), a
+ * provider or model not on the allowlist (403), or non-text content (422).
+ * The message names types and rules, never values. Nothing was sent.
+ */
+export class VelaPolicyBlockedError extends VelaError {
+  constructor(reason: string, status = 403) {
+    super(`Vela policy: ${reason}; nothing was sent upstream`, status);
+  }
+}

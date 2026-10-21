@@ -1,8 +1,8 @@
 import { VelaError } from '../core/errors.js';
 import type { Vela } from '../core/vela.js';
-import { DEFAULT_ANTHROPIC_URL, DEFAULT_UPSTREAM_URL } from '../config/constants.js';
+import { DEFAULT_ANTHROPIC_URL, DEFAULT_GEMINI_URL, DEFAULT_UPSTREAM_URL } from '../config/constants.js';
 import { detectApiFormat } from './formats.js';
-import { forwardLlmRequest, nodeHeadersToWeb, pipeResponseToNode } from './gateway.js';
+import { forwardLlmRequest, nodeHeadersToWeb, pipeResponseToNode, selectApiKey } from './gateway.js';
 import type { ExpressMiddlewareOptions } from '../types.js';
 
 export interface MinimalRequest {
@@ -49,8 +49,13 @@ export function createExpressMiddleware(
   opts: ExpressMiddlewareOptions = {},
 ): (req: MinimalRequest, res: MinimalResponse, next: NextFunction) => Promise<void> {
   const upstream = (opts.upstream ?? DEFAULT_UPSTREAM_URL).replace(/\/+$/, '');
-  const upstreamFor = (path: string): string =>
-    !opts.upstream && detectApiFormat(path) === 'anthropic-messages' ? DEFAULT_ANTHROPIC_URL : upstream;
+  const upstreamFor = (path: string): string => {
+    if (opts.upstream) return upstream;
+    const format = detectApiFormat(path);
+    if (format === 'anthropic-messages') return DEFAULT_ANTHROPIC_URL;
+    if (format === 'gemini') return DEFAULT_GEMINI_URL;
+    return upstream;
+  };
 
   return async function velaMiddleware(req, res, next): Promise<void> {
     if ((req.method ?? 'POST').toUpperCase() !== 'POST' || !detectApiFormat(req.path)) return next();
@@ -71,7 +76,10 @@ export function createExpressMiddleware(
           body,
           signal: controller.signal,
         },
-        opts.apiKey ? { apiKey: opts.apiKey } : {},
+        (() => {
+          const key = selectApiKey(opts, upstreamFor(req.path) + req.path, detectApiFormat(req.path));
+          return key ? { apiKey: key } : {};
+        })(),
       );
       if (res.writeHead) {
         await pipeResponseToNode(response, res as Required<Pick<MinimalResponse, 'writeHead'>> & MinimalResponse);

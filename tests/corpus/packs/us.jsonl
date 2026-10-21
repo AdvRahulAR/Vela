@@ -1,0 +1,6 @@
+{"text":"ITIN 912-70-1234 on the return","entities":[{"type":"US_ITIN","value":"912-70-1234"}]}
+{"text":"Employer EIN: 12-3456789","entities":[{"type":"US_EIN","value":"12-3456789"}]}
+{"text":"ACH routing number 011000015, account below","entities":[{"type":"ABA_ROUTING","value":"011000015"}]}
+{"text":"Medicare MBI 1EG4-TE5-MK73 on the card","entities":[{"type":"US_MBI","value":"1EG4-TE5-MK73"}]}
+{"text":"routing number 123456789 looks wrong","entities":[]}
+{"text":"Part 12-3456789 is in stock","entities":[]}

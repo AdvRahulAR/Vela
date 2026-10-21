@@ -1,0 +1,11 @@
+{"text":"Her CKYC number is 1234 5678 901234 on record","entities":[{"type":"CKYC_ID","value":"1234 5678 901234"}]}
+{"text":"UAN: 100123456789 for EPF transfer","entities":[{"type":"UAN","value":"100123456789"}]}
+{"text":"Demat BO ID 1208160012345678 and NSDL IN30012345678901","entities":[{"type":"DEMAT_ID","value":"1208160012345678"},{"type":"DEMAT_ID","value":"IN30012345678901"}]}
+{"text":"Company CIN U72900KA2019PTC123456, director DIN 01234567","entities":[{"type":"CIN","value":"U72900KA2019PTC123456"},{"type":"DIN","value":"01234567"}]}
+{"text":"TAN BLRA12345B was quoted on Form 16","entities":[{"type":"TAN","value":"BLRA12345B"}]}
+{"text":"LEI 5493001KJTIIGC8Y1R12 for the counterparty","entities":[{"type":"LEI","value":"5493001KJTIIGC8Y1R12"}]}
+{"text":"MICR 400002010 and SWIFT code SBININBB104","entities":[{"type":"MICR","value":"400002010"},{"type":"SWIFT_BIC","value":"SBININBB104"}]}
+{"text":"The car KL 07 AB 1234 and the van 22 BH 1234 AA were insured","entities":[{"type":"VEHICLE_REG","value":"KL 07 AB 1234"},{"type":"VEHICLE_REG","value":"22 BH 1234 AA"}]}
+{"text":"Invoice 100123456789 was paid on 12 March","entities":[]}
+{"text":"Order 1208160012345678 shipped","entities":[]}
+{"text":"BALANCE SHEET SUMMARY 2024 approved","entities":[]}

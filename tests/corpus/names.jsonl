@@ -15,3 +15,4 @@
 {"text":"राहुल शर्मा ने फोन किया","entities":[{"type":"PERSON","value":"राहुल शर्मा"}],"tags":["name","hard","indic"]}
 {"text":"Thiruvenkatam will attend","entities":[{"type":"PERSON","value":"Thiruvenkatam"}],"tags":["name","hard"]}
 {"text":"I met deepa. later arjun came","entities":[{"type":"PERSON","value":"deepa"},{"type":"PERSON","value":"arjun"}],"tags":["name","lowercase"]}
+{"text":"Please charge the card for the renewal of Anitha Menon.","entities":[{"type":"PERSON","value":"Anitha Menon"}],"tags":["name","surname-anchored"]}

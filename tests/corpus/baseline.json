@@ -1,7 +1,7 @@
 {
   "recall": {
     "AADHAAR": 1,
-    "ADDRESS": 0.7143,
+    "ADDRESS": 0.75,
     "BANK_ACCOUNT": 1,
     "CREDIT_CARD": 1,
     "DATE_OF_BIRTH": 1,
@@ -16,7 +16,7 @@
     "ORG": 1,
     "PAN": 1,
     "PASSPORT": 1,
-    "PERSON": 0.7692,
+    "PERSON": 0.8214,
     "PHONE": 1,
     "PIN_CODE": 1,
     "SECRET_KEY": 1,

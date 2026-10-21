@@ -1,12 +1,28 @@
 // Core
 export { Vela } from './core/vela.js';
-export { VelaError, VelaInputTooLargeError, VelaRecognizerError, VelaNotPreparedError } from './core/errors.js';
-export { MaskSession } from './core/session.js';
+export {
+  VelaError,
+  VelaInputTooLargeError,
+  VelaRecognizerError,
+  VelaNotPreparedError,
+  VelaRouteBlockedError,
+  VelaAuditError,
+  VelaPolicyBlockedError,
+} from './core/errors.js';
+export {
+  consoleSink,
+  jsonlFileSink,
+  verifyAuditChain,
+  canonicalJson,
+  type AuditEvent,
+  type AuditSink,
+} from './core/audit.js';
+export { MaskSession, type RestorePolicy, type RestoreReport } from './core/session.js';
 export { FF1 } from './core/ff1.js';
 export { FpeMasker, STRUCTURED_TYPES } from './core/fpe.js';
 export { TokenMasker } from './core/tokens.js';
 export { QuantumKeyManager } from './core/quantum.js';
-export { Restorer, StreamRestorer, replacementsFrom } from './core/matcher.js';
+export { Restorer, StreamRestorer, replacementsFrom, type RestoreField, type RestoreOptions } from './core/matcher.js';
 export {
   TokenStreamDeMasker,
   createSseDeMasker,
@@ -15,8 +31,36 @@ export {
   OpenAiChatStreamUnmasker,
   AnthropicStreamUnmasker,
   ResponsesStreamUnmasker,
+  GeminiStreamUnmasker,
+  ConverseStreamUnmasker,
 } from './core/streaming.js';
-export { detectPii, type DetectOptions } from './core/detector.js';
+export { detectPii, type DetectOptions, type DetectorPattern, type ContextRule } from './core/detector.js';
+
+// Key providers
+export {
+  envKeyProvider,
+  envelopeKeyProvider,
+  awsKmsKeyProvider,
+  azureKeyVaultKeyProvider,
+  gcpKmsKeyProvider,
+  vaultTransitKeyProvider,
+  type KeyProvider,
+  type ProvidedKey,
+} from './core/keys.js';
+
+// Policy and detector packs
+export {
+  loadPolicy,
+  validatePolicy,
+  policyHash,
+  VelaPolicyError,
+  ENTITY_ACTIONS,
+  type VelaPolicy,
+  type EntityAction,
+} from './core/policy.js';
+export { POLICY_PRESETS, resolvePolicy } from './policies/presets.js';
+export { DETECTOR_PACKS, resolvePacks } from './packs/index.js';
+export { invalidateCheck } from './core/fpe.js';
 
 // Algorithms
 export { validateVerhoeff, generateVerhoeffChecksum } from './core/algorithms/verhoeff.js';
@@ -43,12 +87,21 @@ export {
   unmaskAnthropicStream,
   wrapAnthropicClient,
 } from './integrations/anthropic.js';
-export { detectApiFormat, maskLlmRequest, maskLlmRequestAsync } from './integrations/formats.js';
+export {
+  detectApiFormat,
+  classifyRoute,
+  maskLlmRequest,
+  maskLlmRequestAsync,
+  maskFieldsAsync,
+  type RouteClass,
+} from './integrations/formats.js';
 export { presidioRecognizer, codePointToUtf16Index, type PresidioRecognizerOptions } from './integrations/presidio.js';
-export { forwardLlmRequest } from './integrations/gateway.js';
+export { forwardLlmRequest, forwardFieldsRequest, enforceRequestPolicy, REQUEST_ID_HEADER } from './integrations/gateway.js';
 export { createFetchInterceptor } from './integrations/fetch.js';
+export { wrapBedrockClient, type BedrockRuntimeLikeClient } from './integrations/bedrock.js';
 export { createExpressMiddleware } from './integrations/express.js';
 export { runProxy } from './integrations/proxy.js';
+export { VelaMetrics } from './integrations/metrics.js';
 
 // Observability
 export { Logger } from './utils/logger.js';
@@ -65,6 +118,7 @@ export {
   DEFAULT_PROXY_HOST,
   DEFAULT_UPSTREAM_URL,
   DEFAULT_ANTHROPIC_URL,
+  DEFAULT_GEMINI_URL,
   SESSION_HEADER,
 } from './config/constants.js';
 

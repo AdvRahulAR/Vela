@@ -1,13 +1,27 @@
-import { Restorer, replacementsFrom, type RestoreOptions, type StreamRestorer } from './matcher.js';
+import { Restorer, replacementsFrom, type RestoreField, type RestoreOptions, type StreamRestorer } from './matcher.js';
 import type { LlmApiFormat, MaskResult, StreamDeMasker } from '../types.js';
 
 /** Anything that can restore values: a MaskSession, or a set of legacy MaskResults. */
 export interface RestoreSource {
   createStreamDeMasker(opts?: RestoreOptions): StreamRestorer;
-  unmaskValue<T>(value: T, key?: string): T;
+  unmaskValue<T>(value: T, key?: string, field?: RestoreField): T;
 }
 
 const JSON_STRING_KEYS = new Set(['arguments', 'partial_json']);
+const TOOL_ARG_KEYS = new Set(['arguments', 'parsed_arguments', 'partial_json', 'input', 'code', 'args', 'functionCall', 'toolUse']);
+const THINKING_KEYS = new Set(['thinking', 'reasoning_content', 'reasoning', 'summary', 'reasoningContent']);
+
+/**
+ * The response field a JSON key starts: tool-call arguments (`arguments`,
+ * `partial_json`, Anthropic `tool_use.input`), model reasoning, or inherited
+ * from the parent (content at the top level).
+ */
+export function fieldForKey(key: string | undefined, parent?: RestoreField): RestoreField | undefined {
+  if (parent && parent !== 'content') return parent;
+  if (key && TOOL_ARG_KEYS.has(key)) return 'tool_args';
+  if (key && THINKING_KEYS.has(key)) return 'thinking';
+  return parent;
+}
 
 /** Adapter turning legacy MaskResult(s) into a RestoreSource. */
 export class ResultRestoreSource implements RestoreSource {
@@ -58,10 +72,10 @@ type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-ex
 class Lanes {
   private readonly lanes = new Map<string, StreamRestorer>();
   constructor(private readonly src: RestoreSource) {}
-  get(key: string, json = false): StreamRestorer {
+  get(key: string, json = false, field: RestoreField = json ? 'tool_args' : 'content'): StreamRestorer {
     let l = this.lanes.get(key);
     if (!l) {
-      l = this.src.createStreamDeMasker({ json });
+      l = this.src.createStreamDeMasker({ json, field });
       this.lanes.set(key, l);
     }
     return l;
@@ -105,7 +119,10 @@ export class OpenAiChatStreamUnmasker implements EventUnmasker {
       const delta: Json | undefined = choice.delta ? { ...choice.delta } : undefined;
       if (delta) {
         for (const field of ['content', 'refusal', 'reasoning_content']) {
-          if (typeof delta[field] === 'string') delta[field] = this.lanes.get(`${idx}|${field}`).feed(delta[field]);
+          if (typeof delta[field] === 'string') {
+            const kind = field === 'reasoning_content' ? 'thinking' : 'content';
+            delta[field] = this.lanes.get(`${idx}|${field}`, false, kind).feed(delta[field]);
+          }
         }
         if (Array.isArray(delta.tool_calls)) {
           delta.tool_calls = delta.tool_calls.map((tc: Json, j: number) => {
@@ -184,7 +201,8 @@ export class AnthropicStreamUnmasker implements EventUnmasker {
       const field = ANTHROPIC_DELTA_FIELDS[ev.delta.type as string];
       if (field && typeof ev.delta[field] === 'string') {
         this.deltaType.set(ev.index, ev.delta.type);
-        const lane = this.lanes.get(String(ev.index), field === 'partial_json');
+        const kind = field === 'partial_json' ? 'tool_args' : field === 'thinking' ? 'thinking' : 'content';
+        const lane = this.lanes.get(String(ev.index), field === 'partial_json', kind);
         return [{ ...ev, delta: { ...ev.delta, [field]: lane.feed(ev.delta[field]) } }];
       }
       return [this.src.unmaskValue(ev)];
@@ -224,7 +242,10 @@ export class ResponsesStreamUnmasker implements EventUnmasker {
       const base = ev.type.slice(0, -'.delta'.length);
       const key = this.key(base, ev);
       this.templates.set(key, ev);
-      return [{ ...ev, delta: this.lanes.get(key, base.includes('arguments')).feed(ev.delta) }];
+      // Only known text events count as content or thinking; every other delta (function and
+      // custom tool input, code interpreter code, future tool events) is a tool argument.
+      const kind = /output_text|refusal|transcript/.test(base) ? 'content' : base.includes('reasoning') ? 'thinking' : 'tool_args';
+      return [{ ...ev, delta: this.lanes.get(key, base.includes('arguments'), kind).feed(ev.delta) }];
     }
     if (ev.type.endsWith('.done')) {
       const base = ev.type.slice(0, -'.done'.length);
@@ -245,8 +266,114 @@ export class ResponsesStreamUnmasker implements EventUnmasker {
   }
 }
 
+/**
+ * Gemini streaming: each chunk is a GenerateContentResponse whose text parts are
+ * increments. One lane per candidate (text, and thought text separately);
+ * function calls arrive whole and are restored as tool arguments. Lanes flush
+ * on the candidate's finishReason.
+ */
+export class GeminiStreamUnmasker implements EventUnmasker {
+  private readonly lanes: Lanes;
+  private template: Json = {};
+  constructor(private readonly src: RestoreSource) {
+    this.lanes = new Lanes(src);
+  }
+
+  process(chunk: Json): Json[] {
+    if (!chunk || !Array.isArray(chunk.candidates)) return [this.src.unmaskValue(chunk)];
+    this.template = { ...(chunk.modelVersion ? { modelVersion: chunk.modelVersion } : {}), ...(chunk.responseId ? { responseId: chunk.responseId } : {}) };
+    const candidates = chunk.candidates.map((cand: Json, i: number) => {
+      const idx = cand.index ?? i;
+      const parts = Array.isArray(cand.content?.parts)
+        ? cand.content.parts.map((p: Json) => {
+            if (typeof p?.text === 'string') {
+              const kind = p.thought ? 'thinking' : 'content';
+              return { ...p, text: this.lanes.get(`${idx}|${kind}`, false, kind).feed(p.text) };
+            }
+            return this.src.unmaskValue(p, undefined, p?.functionCall ? 'tool_args' : undefined);
+          })
+        : undefined;
+      const out: Json = { ...cand, ...(parts ? { content: { ...cand.content, parts } } : {}) };
+      if (cand.finishReason) this.flushInto(idx, out);
+      return out;
+    });
+    return [{ ...chunk, candidates }];
+  }
+
+  private flushInto(idx: number, cand: Json): void {
+    const extra: Json[] = [];
+    for (const kind of ['content', 'thinking']) {
+      const rest = this.lanes.flush(`${idx}|${kind}`);
+      if (rest) extra.push(kind === 'thinking' ? { text: rest, thought: true } : { text: rest });
+    }
+    if (!extra.length) return;
+    cand.content = { role: 'model', ...(cand.content ?? {}), parts: [...(cand.content?.parts ?? []), ...extra] };
+  }
+
+  finish(): Json[] {
+    const idxs = new Set(this.lanes.keys().map((k) => Number(k.split('|')[0])));
+    const candidates: Json[] = [];
+    for (const idx of idxs) {
+      const cand: Json = { index: idx };
+      this.flushInto(idx, cand);
+      if (cand.content) candidates.push(cand);
+    }
+    return candidates.length ? [{ ...this.template, candidates }] : [];
+  }
+}
+
+/**
+ * Bedrock ConverseStream events (as decoded by the AWS SDK): one lane per
+ * content block for text, tool input (partial JSON) and reasoning text.
+ */
+export class ConverseStreamUnmasker implements EventUnmasker {
+  private readonly lanes: Lanes;
+  private readonly kinds = new Map<number, 'text' | 'toolUse' | 'reasoning'>();
+  constructor(private readonly src: RestoreSource) {
+    this.lanes = new Lanes(src);
+  }
+
+  process(ev: Json): Json[] {
+    const d = ev?.contentBlockDelta;
+    if (d && typeof d === 'object') {
+      const i = Number(d.contentBlockIndex ?? 0);
+      const delta: Json = { ...(d.delta ?? {}) };
+      if (typeof delta.text === 'string') {
+        this.kinds.set(i, 'text');
+        delta.text = this.lanes.get(`${i}`, false, 'content').feed(delta.text);
+      } else if (typeof delta.toolUse?.input === 'string') {
+        this.kinds.set(i, 'toolUse');
+        delta.toolUse = { ...delta.toolUse, input: this.lanes.get(`${i}`, true, 'tool_args').feed(delta.toolUse.input) };
+      } else if (typeof delta.reasoningContent?.text === 'string') {
+        this.kinds.set(i, 'reasoning');
+        delta.reasoningContent = { ...delta.reasoningContent, text: this.lanes.get(`${i}`, false, 'thinking').feed(delta.reasoningContent.text) };
+      } else return [this.src.unmaskValue(ev)];
+      return [{ ...ev, contentBlockDelta: { ...d, delta } }];
+    }
+    if (ev?.contentBlockStop) return [...this.flushBlock(Number(ev.contentBlockStop.contentBlockIndex ?? 0)), ev];
+    if (ev?.messageStop) return [...this.finish(), this.src.unmaskValue(ev)];
+    return [this.src.unmaskValue(ev)];
+  }
+
+  private flushBlock(i: number): Json[] {
+    const rest = this.lanes.flush(`${i}`);
+    if (!rest) return [];
+    const kind = this.kinds.get(i) ?? 'text';
+    const delta = kind === 'toolUse' ? { toolUse: { input: rest } } : kind === 'reasoning' ? { reasoningContent: { text: rest } } : { text: rest };
+    return [{ contentBlockDelta: { contentBlockIndex: i, delta } }];
+  }
+
+  finish(): Json[] {
+    return this.lanes.keys().flatMap((k) => this.flushBlock(Number(k)));
+  }
+}
+
 export function createEventUnmasker(format: LlmApiFormat, src: RestoreSource): EventUnmasker {
   switch (format) {
+    case 'gemini':
+      return new GeminiStreamUnmasker(src);
+    case 'bedrock-converse':
+      return new ConverseStreamUnmasker(src);
     case 'anthropic-messages':
       return new AnthropicStreamUnmasker(src);
     case 'openai-responses':

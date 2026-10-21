@@ -7,9 +7,56 @@ type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-ex
 export function detectApiFormat(pathname: string): LlmApiFormat | null {
   const p = pathname.replace(/\/+$/, '');
   if (/\/chat\/completions$/.test(p)) return 'openai-chat';
-  if (/\/responses$/.test(p)) return 'openai-responses';
-  if (/\/messages$/.test(p) && !/\/threads\//.test(p)) return 'anthropic-messages';
+  // input_tokens counts tokens for a Responses request: same body, same masking.
+  if (/\/responses(\/input_tokens)?$/.test(p)) return 'openai-responses';
+  // count_tokens takes a full Messages request body.
+  if (/\/messages(\/count_tokens)?$/.test(p) && !/\/threads\//.test(p)) return 'anthropic-messages';
+  // Gemini API and Vertex AI: …/models/{model}:generateContent (and streaming / token counting).
+  if (/\/models\/[^/]+:(?:generateContent|streamGenerateContent|countTokens)$/.test(p)) return 'gemini';
   return null;
+}
+
+/**
+ * How Vela handles a request to a provider route:
+ * - `llm`: a chat/messages/responses request, masked and restored;
+ * - `fields`: top-level text fields (`input`, `prompt`) are masked; the JSON response is restored;
+ * - `safe`: a method that carries no body (GET, HEAD, OPTIONS, DELETE, POST …/cancel), forwarded with any body dropped;
+ * - `blocked`: anything else. Vela can't mask it, so it is not sent (fail closed).
+ */
+export type RouteClass =
+  | { kind: 'llm'; format: LlmApiFormat }
+  | { kind: 'fields'; fields: string[]; allowStream: boolean }
+  | { kind: 'safe' }
+  | { kind: 'blocked'; reason: string };
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'DELETE']);
+
+export function classifyRoute(method: string, pathname: string): RouteClass {
+  const m = method.toUpperCase();
+  // Encoded paths could classify differently from how the provider routes them.
+  if (pathname.includes('%')) return { kind: 'blocked', reason: 'percent-encoded paths are not accepted' };
+  if (SAFE_METHODS.has(m)) return { kind: 'safe' };
+  const p = pathname.replace(/\/+$/, '');
+  // Cancel endpoints take no body (the body is dropped when forwarding).
+  if (m === 'POST' && /\/cancel$/.test(p)) return { kind: 'safe' };
+  if (m === 'POST') {
+    const format = detectApiFormat(p);
+    if (format) return { kind: 'llm', format };
+    if (/\/(embeddings|moderations)$/.test(p)) return { kind: 'fields', fields: ['input'], allowStream: false };
+    // Legacy text completions; streaming them is not supported, so it is rejected.
+    if (/\/completions$/.test(p)) return { kind: 'fields', fields: ['prompt', 'suffix'], allowStream: false };
+    // Ollama's native API returns NDJSON, which Vela can't restore; its /v1 OpenAI-compatible routes work.
+    if (/^\/api\/(chat|generate|embed|embeddings)$/.test(p)) {
+      return { kind: 'blocked', reason: "use Ollama's OpenAI-compatible /v1 endpoints" };
+    }
+    if (/\/batches(\/|$)/.test(p)) return { kind: 'blocked', reason: 'batch results arrive later and cannot be restored' };
+    if (/\/(files|uploads)(\/|$)/.test(p)) return { kind: 'blocked', reason: 'file uploads cannot be masked' };
+    if (/\/audio(\/|$)/.test(p)) return { kind: 'blocked', reason: 'audio cannot be masked' };
+    if (/^\/model\/[^/]+\/(?:converse|converse-stream|invoke|invoke-with-response-stream)$/.test(p)) {
+      return { kind: 'blocked', reason: 'Bedrock requests are signed (SigV4); mask them in-process with wrapBedrockClient' };
+    }
+  }
+  return { kind: 'blocked', reason: 'Vela does not know how to mask this route' };
 }
 
 /**
@@ -22,6 +69,7 @@ function mapTextParts(parts: unknown, visit: Visit): unknown {
   if (typeof parts === 'string') return visit(parts, 'text');
   if (!Array.isArray(parts)) return parts;
   return parts.map((p: Json) => {
+    if (typeof p === 'string') return visit(p, 'text');
     if (!p || typeof p !== 'object') return p;
     if (typeof p.text === 'string') return { ...p, text: visit(p.text, 'text') };
     return p;
@@ -120,8 +168,100 @@ function walkAnthropic(body: Json, visit: Visit): Json {
   return out;
 }
 
+/** Gemini parts: text, function calls and responses. inlineData / fileData are non-text. */
+function walkGeminiParts(parts: unknown, visit: Visit): unknown {
+  if (!Array.isArray(parts)) return parts;
+  return parts.map((p: Json) => {
+    if (!p || typeof p !== 'object') return p;
+    const o: Json = { ...p };
+    if (typeof o.text === 'string') o.text = visit(o.text, 'text');
+    if (o.functionCall?.args !== undefined) o.functionCall = { ...o.functionCall, args: visit(o.functionCall.args, 'value') };
+    if (o.functionResponse?.response !== undefined) o.functionResponse = { ...o.functionResponse, response: visit(o.functionResponse.response, 'value') };
+    return o;
+  });
+}
+
+function walkGemini(body: Json, visit: Visit): Json {
+  const out: Json = { ...body };
+  const sys = out.systemInstruction ?? out.system_instruction;
+  if (sys && typeof sys === 'object') {
+    const key = out.systemInstruction ? 'systemInstruction' : 'system_instruction';
+    out[key] = { ...sys, parts: walkGeminiParts(sys.parts, visit) };
+  }
+  if (Array.isArray(out.contents)) {
+    out.contents = out.contents.map((c: Json) => (c && typeof c === 'object' ? { ...c, parts: walkGeminiParts(c.parts, visit) } : c));
+  }
+  if (Array.isArray(out.tools)) {
+    out.tools = out.tools.map((t: Json) => {
+      const decls = t?.functionDeclarations ?? t?.function_declarations;
+      if (!Array.isArray(decls)) return t;
+      const key = t.functionDeclarations ? 'functionDeclarations' : 'function_declarations';
+      return { ...t, [key]: decls.map((d: Json) => ({ ...d, ...(typeof d.description === 'string' ? { description: visit(d.description, 'text') } : {}), ...(d.parameters ? { parameters: visit(d.parameters, 'value') } : {}) })) };
+    });
+  }
+  return out;
+}
+
+const TEXT_DOC_FORMATS = new Set(['txt', 'md', 'csv', 'html']);
+
+/** Bedrock Converse content blocks. */
+function walkConverseBlocks(content: unknown, visit: Visit): unknown {
+  if (!Array.isArray(content)) return content;
+  return content.map((b: Json) => {
+    if (!b || typeof b !== 'object') return b;
+    const o: Json = { ...b };
+    if (typeof o.text === 'string') o.text = visit(o.text, 'text');
+    // Text-format documents are bytes on the wire but text to the model: mask them as text.
+    if (o.document && TEXT_DOC_FORMATS.has(o.document.format) && o.document.source?.bytes instanceof Uint8Array) {
+      const text = new TextDecoder().decode(o.document.source.bytes);
+      const masked = visit(text, 'text');
+      if (typeof masked === 'string') o.document = { ...o.document, source: { ...o.document.source, bytes: new TextEncoder().encode(masked) } };
+    }
+    if (o.toolUse?.input !== undefined) o.toolUse = { ...o.toolUse, input: visit(o.toolUse.input, 'value') };
+    if (Array.isArray(o.toolResult?.content)) {
+      o.toolResult = {
+        ...o.toolResult,
+        content: o.toolResult.content.map((c: Json) =>
+          typeof c?.text === 'string' ? { ...c, text: visit(c.text, 'text') } : c?.json !== undefined ? { ...c, json: visit(c.json, 'value') } : c,
+        ),
+      };
+    }
+    return o;
+  });
+}
+
+function walkConverse(body: Json, visit: Visit): Json {
+  const out: Json = { ...body };
+  if (Array.isArray(out.system)) out.system = walkConverseBlocks(out.system, visit);
+  if (Array.isArray(out.messages)) {
+    out.messages = out.messages.map((m: Json) => (m && typeof m === 'object' ? { ...m, content: walkConverseBlocks(m.content, visit) } : m));
+  }
+  if (Array.isArray(out.toolConfig?.tools)) {
+    out.toolConfig = {
+      ...out.toolConfig,
+      tools: out.toolConfig.tools.map((t: Json) =>
+        t?.toolSpec
+          ? {
+              ...t,
+              toolSpec: {
+                ...t.toolSpec,
+                ...(typeof t.toolSpec.description === 'string' ? { description: visit(t.toolSpec.description, 'text') } : {}),
+                ...(t.toolSpec.inputSchema ? { inputSchema: visit(t.toolSpec.inputSchema, 'value') } : {}),
+              },
+            }
+          : t,
+      ),
+    };
+  }
+  return out;
+}
+
 function walk(format: LlmApiFormat, body: Json, visit: Visit): Json {
   switch (format) {
+    case 'gemini':
+      return walkGemini(body, visit);
+    case 'bedrock-converse':
+      return walkConverse(body, visit);
     case 'openai-responses':
       return walkResponses(body, visit);
     case 'anthropic-messages':
@@ -143,11 +283,13 @@ export function maskLlmRequest<T extends object>(session: MaskSession, format: L
     else session.learnValue(v);
     return v;
   });
-  return walk(format, body as Json, (v, kind) => {
+  const walked = walk(format, body as Json, (v, kind) => {
     if (kind === 'text' && typeof v === 'string') return session.mask(v);
     if (kind === 'json' && typeof v === 'string') return session.maskJsonString(v);
     return session.maskValue(v);
-  }) as T;
+  });
+  // Backstop: fields the walk doesn't know (user, metadata, message names…) are masked too.
+  return session.maskResidual(walked) as T;
 }
 
 /**
@@ -157,4 +299,61 @@ export function maskLlmRequest<T extends object>(session: MaskSession, format: L
 export async function maskLlmRequestAsync<T extends object>(session: MaskSession, format: LlmApiFormat, body: T): Promise<T> {
   await session.prepareValue(body);
   return maskLlmRequest(session, format, body);
+}
+
+function maskNested(v: unknown, mask: (s: string) => string): unknown {
+  if (typeof v === 'string') return mask(v);
+  if (Array.isArray(v)) return v.map((x) => maskNested(x, mask));
+  if (v && typeof v === 'object' && typeof (v as Json).text === 'string') return { ...(v as Json), text: mask((v as Json).text) };
+  return v;
+}
+
+/**
+ * Mask top-level text fields (`input`, `prompt`) of a `fields` route. Each
+ * field may be a string or an array of strings; other values are left alone.
+ */
+export async function maskFieldsAsync<T extends Record<string, unknown>>(session: MaskSession, fields: string[], body: T): Promise<T> {
+  const out: Record<string, unknown> = { ...body };
+  await session.prepareValue(body);
+  for (const f of fields) {
+    const v = out[f];
+    if (typeof v === 'string') out[f] = session.mask(v);
+    // Arrays may hold strings, token ids, nested arrays or multimodal parts ({ type: 'text', text }).
+    else if (Array.isArray(v)) out[f] = maskNested(v, (x) => session.mask(x));
+  }
+  return session.maskResidual(out) as T;
+}
+
+/** Content-part types that carry text Vela masks (everything else is non-text). */
+const TEXT_PART_TYPES = new Set([
+  'text', 'input_text', 'output_text', 'tool_use', 'server_tool_use', 'tool_result', 'thinking', 'redacted_thinking',
+  'function_call', 'function_call_output', 'message', 'reasoning', 'refusal', 'search_result',
+  'web_search_tool_result', 'web_fetch_tool_result', 'code_execution_tool_result',
+]);
+/** Keys that mark an object as a content part rather than a setting such as `{ type: 'auto' }`. */
+const PART_KEYS = ['content', 'source', 'image_url', 'input_audio', 'file', 'file_id', 'file_data', 'file_url', 'text'];
+
+/**
+ * Types of non-text content (images, audio, files, non-text documents) in a
+ * request, for the `nonText: 'block'` policy. Empty when there are none.
+ */
+export function findNonText(body: unknown): string[] {
+  const found = new Set<string>();
+  const visit = (v: unknown): void => {
+    if (Array.isArray(v)) return v.forEach(visit);
+    if (!v || typeof v !== 'object') return;
+    const o = v as Json;
+    // Gemini parts and Bedrock Converse blocks carry media under a key rather than a `type`.
+    for (const k of ['inlineData', 'inline_data', 'fileData', 'file_data', 'image', 'document', 'video']) {
+      const textDoc = k === 'document' && (o.type || TEXT_DOC_FORMATS.has(o[k]?.format));
+      if (o[k] && typeof o[k] === 'object' && !textDoc) found.add(k);
+    }
+    if (typeof o.type === 'string' && PART_KEYS.some((k) => k in o)) {
+      const textDoc = o.type === 'document' && o.source?.type === 'text';
+      if (!TEXT_PART_TYPES.has(o.type) && !textDoc) found.add(o.type);
+    }
+    for (const x of Object.values(o)) if (x && typeof x === 'object') visit(x);
+  };
+  visit(body);
+  return [...found];
 }

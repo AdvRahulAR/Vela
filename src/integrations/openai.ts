@@ -8,6 +8,7 @@ import {
   type RestoreSource,
 } from '../core/streaming.js';
 import { maskLlmRequest, maskLlmRequestAsync } from './formats.js';
+import { auditedMethod, fieldsMethod, guardClient } from './wrap-util.js';
 import type { MaskResult, OpenAIRequest, OpenAIResponse, SessionOptions } from '../types.js';
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -45,7 +46,7 @@ export async function maskOpenAiRequestAsync(
   opts: SessionOptions & { session?: MaskSession } = {},
 ): Promise<{ payload: OpenAIRequest; results: MaskResult[]; session: MaskSession }> {
   const session = opts.session ?? vela.createSession(opts);
-  const payload = await maskLlmRequestAsync(session, 'openai-chat', request);
+    const payload = await maskLlmRequestAsync(session, 'openai-chat', request);
   return { payload, results: [session.toResult()], session };
 }
 
@@ -56,7 +57,7 @@ export async function maskOpenAiResponsesRequestAsync<T extends object>(
   opts: SessionOptions & { session?: MaskSession } = {},
 ): Promise<{ payload: T; results: MaskResult[]; session: MaskSession }> {
   const session = opts.session ?? vela.createSession(opts);
-  const payload = await maskLlmRequestAsync(session, 'openai-responses', request);
+    const payload = await maskLlmRequestAsync(session, 'openai-responses', request);
   return { payload, results: [session.toResult()], session };
 }
 
@@ -75,11 +76,13 @@ export function unmaskOpenAiResponse<T = OpenAIResponse>(
 async function* transformStream(
   stream: AsyncIterable<Json>,
   unmasker: EventUnmasker,
+  onDone?: () => void,
 ): AsyncGenerator<Json> {
   for await (const ev of stream) {
     for (const out of unmasker.process(ev)) yield out;
   }
   for (const out of unmasker.finish()) yield out;
+  onDone?.();
 }
 
 /** De-mask a Chat Completions chunk stream (per choice, per tool call, chunk-boundary aware). */
@@ -102,10 +105,10 @@ export function unmaskOpenAiResponsesStream(
  * Wrap a streaming result so iteration is de-masked while the SDK's own Stream
  * helpers (toReadableStream, controller, …) keep working.
  */
-export function wrapAsyncIterable<S extends object>(stream: S, unmasker: EventUnmasker): S {
+export function wrapAsyncIterable<S extends object>(stream: S, unmasker: EventUnmasker, onDone?: () => void): S {
   const wrapped = Object.create(stream) as S & { [Symbol.asyncIterator]: () => AsyncIterator<Json> };
   Object.defineProperty(wrapped, Symbol.asyncIterator, {
-    value: () => transformStream(stream as unknown as AsyncIterable<Json>, unmasker)[Symbol.asyncIterator](),
+    value: () => transformStream(stream as unknown as AsyncIterable<Json>, unmasker, onDone)[Symbol.asyncIterator](),
   });
   return wrapped;
 }
@@ -130,44 +133,68 @@ function resolveSessionId(opt: WrapClientOptions['sessionId'], params: Json): st
   return typeof opt === 'function' ? opt(params) : opt;
 }
 
-function isAsyncIterable(x: unknown): x is AsyncIterable<Json> {
-  return !!x && typeof x === 'object' && Symbol.asyncIterator in x;
-}
+
+/** Why common methods are blocked (any method not wrapped or read-only is blocked). */
+const OPENAI_REASONS: Record<string, string> = {
+  'chat.completions.stream': 'use create({ stream: true }) instead of the stream() helper',
+  'chat.completions.runTools': 'use create() and run tools yourself',
+  'responses.stream': 'use create({ stream: true }) instead of the stream() helper',
+  'batches.create': 'batch results arrive later and cannot be restored',
+  'files.create': 'file uploads cannot be masked',
+  'uploads.create': 'file uploads cannot be masked',
+  'audio.speech.create': 'audio cannot be masked',
+  'audio.transcriptions.create': 'audio cannot be masked',
+  'images.generate': 'image prompts are not masked',
+  'beta.threads.messages.create': 'Assistants threads cannot be restored',
+};
 
 /**
- * Wrap an OpenAI client: `chat.completions.create` and `responses.create`
- * (sync and streaming) are masked on the way out and restored on the way in.
+ * Wrap an OpenAI client. Masked on the way out and restored on the way in:
+ * `chat.completions.create`/`parse` and `responses.create`/`parse` (sync and
+ * streaming), `responses.inputTokens.count`, `completions.create`,
+ * `embeddings.create` and `moderations.create`. Read-only methods (`list`,
+ * `retrieve`, `del`, `cancel`…) pass through. Every other method (`batches.create`,
+ * `files.create`, the `stream()` helpers, Assistants, raw `client.post`…)
+ * throws `VelaRouteBlockedError` instead of sending unmasked text.
  */
 export function wrapOpenAiClient<T extends OpenAICompatibleClient>(client: T, vela: Vela, opts: WrapClientOptions = {}): T {
-  const originalCreate = client.chat.completions.create.bind(client.chat.completions);
-  const wrappedCompletions = Object.create(client.chat.completions);
-  wrappedCompletions.create = async (params: OpenAIRequest, ...rest: unknown[]) => {
-    const sid = resolveSessionId(opts.sessionId, params);
-    const session = vela.createSession(sid !== undefined ? { sessionId: sid } : {});
-    const payload = await maskLlmRequestAsync(session, 'openai-chat', params);
-    const result = await originalCreate(payload, ...rest);
-    if (isAsyncIterable(result)) return wrapAsyncIterable(result, new OpenAiChatStreamUnmasker(session));
-    return session.unmaskValue(result);
-  };
-  const wrappedChat = Object.create(client.chat);
-  wrappedChat.completions = wrappedCompletions;
-  const wrappedClient = Object.create(client);
-  wrappedClient.chat = wrappedChat;
+  const sessionId = (params: Json) => resolveSessionId(opts.sessionId, params);
+  const chat = (route: string) =>
+    auditedMethod({
+      vela,
+      client,
+      route,
+      format: 'openai-chat',
+      sessionId,
+      mask: (session, params) => maskLlmRequestAsync(session, 'openai-chat', params),
+      stream: (result, session, done) => wrapAsyncIterable(result, new OpenAiChatStreamUnmasker(session), done),
+    });
+  const responses = (route: string) =>
+    auditedMethod({
+      vela,
+      client,
+      route,
+      format: 'openai-responses',
+      sessionId,
+      mask: (session, params) => maskLlmRequestAsync(session, 'openai-responses', params),
+      stream: (result, session, done) => wrapAsyncIterable(result, new ResponsesStreamUnmasker(session), done),
+    });
 
-  if (client.responses && typeof client.responses.create === 'function') {
-    const originalResponses = client.responses.create.bind(client.responses);
-    const wrappedResponses = Object.create(client.responses);
-    wrappedResponses.create = async (params: Json, ...rest: unknown[]) => {
-      const sid = resolveSessionId(opts.sessionId, params);
-      const session = vela.createSession(sid !== undefined ? { sessionId: sid } : {});
-      const payload = await maskLlmRequestAsync(session, 'openai-responses', params);
-      const result = await originalResponses(payload, ...rest);
-      if (isAsyncIterable(result)) return wrapAsyncIterable(result, new ResponsesStreamUnmasker(session));
-      return session.unmaskValue(result);
-    };
-    wrappedClient.responses = wrappedResponses;
-  }
-  return wrappedClient as T;
+  return guardClient(
+    client,
+    {
+      'chat.completions.create': chat('/chat/completions'),
+      'chat.completions.parse': chat('/chat/completions'),
+      'beta.chat.completions.parse': chat('/chat/completions'),
+      'responses.create': responses('/responses'),
+      'responses.parse': responses('/responses'),
+      'responses.inputTokens.count': responses('/responses/input_tokens'),
+      'completions.create': fieldsMethod(vela, client, '/completions', ['prompt', 'suffix'], sessionId),
+      'embeddings.create': fieldsMethod(vela, client, '/embeddings', ['input'], sessionId),
+      'moderations.create': fieldsMethod(vela, client, '/moderations', ['input'], sessionId),
+    },
+    OPENAI_REASONS,
+  );
 }
 
 export type { RestoreSource };

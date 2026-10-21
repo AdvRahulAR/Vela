@@ -1,0 +1,6 @@
+{"text":"ABHA 91-1234-5678-9012 linked to the record","entities":[{"type":"ABHA_NUMBER","value":"91-1234-5678-9012"}]}
+{"text":"health id 91123456789012 verified","entities":[{"type":"ABHA_NUMBER","value":"91123456789012"}]}
+{"text":"Login with rahul.sharma@abdm today","entities":[{"type":"ABHA_ADDRESS","value":"rahul.sharma@abdm"}]}
+{"text":"Patient UHID: KMC/2024/001234 admitted, MRN 778899A","entities":[{"type":"MEDICAL_RECORD","value":"KMC/2024/001234"},{"type":"MEDICAL_RECORD","value":"778899A"}]}
+{"text":"ABHA card number 91-2024-0001-0001 printed under the QR code","entities":[{"type":"ABHA_NUMBER","value":"91-2024-0001-0001"}]}
+{"text":"The MRN field is optional","entities":[]}

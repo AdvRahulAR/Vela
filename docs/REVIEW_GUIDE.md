@@ -4,7 +4,7 @@ This guide is for an independent reviewer of vela-privacy. It lists the code in 
 
 ## Getting started
 
-Requires Node 18.19 or newer (Node 22 recommended).
+Requires Node 22 or newer.
 
 ```bash
 git clone https://github.com/AdvRahulAR/Vela.git && cd Vela
@@ -67,6 +67,18 @@ VELA_PBT_RUNS=5000 npm test # deeper property-based run
 
 12. Header handling: are `host`, `content-length`, hop-by-hop and authentication headers stripped or replaced correctly when forwarding, and can a client make the proxy send its configured API key to a different host?
 13. Body size, `maxInputChars`, recognizer timeouts and the ReDoS suite (`tests/perf.test.ts`) aim to bound work per request. Is there an input that still causes super-linear time or unbounded memory?
+
+## Fail-open checklist
+
+Run through this for every change that touches an integration. Each item is a way a past version leaked (see `docs/solutions/`).
+
+- Every branch that calls `originalFetch`, `forwardPassthrough` or `next()` with a request body: can a request on an LLM provider route reach it? It must be masked, body-free, or rejected.
+- Every `catch` around parsing or masking: does it fall back to sending the original? It must throw a `VelaError` instead.
+- Every new provider route or SDK method: is it in `tests/route-matrix.test.ts`, as masked or blocked?
+- Every log, error message and audit field: can it contain a value? Only counts, types, routes and timings may be logged.
+- Every new option: is the default the fail-closed choice, with the open choice an explicit opt-in?
+- Every new provider: are its hosts (global and regional), its model location (body or path), its key header, its reasoning markers and its binary fields covered, with a route-matrix row?
+- Every key or credential: can it reach a host it wasn't configured for?
 
 ## Known limitations (not findings)
 

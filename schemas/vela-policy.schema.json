@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AdvRahulAR/Vela/schemas/vela-policy.schema.json",
+  "title": "Vela masking policy",
+  "description": "Declarative masking policy for vela-privacy. Validate YAML with an editor that supports JSON Schema (e.g. `# yaml-language-server: $schema=...`). Vela itself rejects unknown keys and actions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id"],
+  "$defs": {
+    "action": { "enum": ["fpe", "fpe-synthetic", "token", "redact", "block", "allow"] },
+    "globs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "restoreMode": { "enum": ["restore", "placeholders"] }
+  },
+  "properties": {
+    "id": { "type": "string", "pattern": "^[\\w.-]{1,64}$", "description": "Recorded in audit events." },
+    "version": { "type": ["string", "number"] },
+    "description": { "type": "string" },
+    "entities": {
+      "type": "object",
+      "description": "Action per entity type. Unlisted types keep Vela's default (FPE for structured IDs, placeholder otherwise).",
+      "propertyNames": { "pattern": "^[A-Z][A-Z0-9_]*$" },
+      "additionalProperties": {
+        "oneOf": [
+          { "$ref": "#/$defs/action" },
+          { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "$ref": "#/$defs/action" } } }
+        ]
+      }
+    },
+    "providers": { "type": "object", "additionalProperties": false, "required": ["allow"], "properties": { "allow": { "$ref": "#/$defs/globs" } } },
+    "models": { "type": "object", "additionalProperties": false, "required": ["allow"], "properties": { "allow": { "$ref": "#/$defs/globs" } } },
+    "nonText": { "enum": ["allow", "block"] },
+    "restore": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "content": { "$ref": "#/$defs/restoreMode" },
+        "toolArguments": { "$ref": "#/$defs/restoreMode" },
+        "thinking": { "$ref": "#/$defs/restoreMode" }
+      }
+    },
+    "ner": { "type": "object", "additionalProperties": false, "required": ["required"], "properties": { "required": { "type": "boolean" } } },
+    "packs": { "type": "array", "items": { "enum": ["pci", "india-bfsi", "health-in", "us", "eu-uk", "intl"] } }
+  }
+}
