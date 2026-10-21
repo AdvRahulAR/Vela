@@ -13,7 +13,7 @@ import {
   VelaRouteBlockedError,
   VelaPolicyBlockedError,
 } from '../src/index.js';
-import { SENTINELS, SENTINEL_TEXT, assertNoSentinel, baseUrlOf } from './helpers/leak-oracle.js';
+import { SENTINELS, SENTINEL_TEXT, assertNoSentinel, baseUrlOf, startUpstream } from './helpers/leak-oracle.js';
 
 type Any = any;  
 
@@ -82,15 +82,25 @@ describe('review findings: providers', () => {
   it('6. /readyz is cached and /metrics has no tenant labels by default', async () => {
     let calls = 0;
     const vela = new Vela({ asyncRecognizers: [async (t) => { calls++; return t.map(() => []); }] });
-    const proxy = runProxy(vela, { port: 0, authTokens: { 'tok-for-tenant-acme': 'acme-secret-tenant' } });
+    const up = await startUpstream();
+    const proxy = runProxy(vela, { port: 0, upstream: up.url, authTokens: { 'tok-for-tenant-acme': 'acme-secret-tenant' } });
     try {
       const base = await baseUrlOf(proxy);
       for (let i = 0; i < 5; i++) assert.equal((await fetch(`${base}/readyz`)).status, 200);
       assert.equal(calls, 1);
-      await fetch(`${base}/v1/models`, { headers: { 'x-vela-key': 'tok-for-tenant-acme' } });
-      assert.doesNotMatch(await (await fetch(`${base}/metrics`)).text(), /acme-secret-tenant/);
+      // An audited LLM request, so a request series exists and can be checked for the label.
+      await fetch(`${base}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-vela-key': 'tok-for-tenant-acme' },
+        body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }),
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      const text = await (await fetch(`${base}/metrics`)).text();
+      assert.match(text, /vela_requests_total\{format="openai-chat",outcome="forwarded"\} 1/);
+      assert.doesNotMatch(text, /acme-secret-tenant/);
     } finally {
       await new Promise((r) => proxy.close(r));
+      await up.close();
     }
   });
 });
